@@ -1,0 +1,87 @@
+@model StockSim.Application.Dtos.AiQueueItemDetailDto
+@using StockSim.Domain.Enums
+@using System.Text.Json
+@{
+    string TypeName(AiQueueTaskType t) => t switch
+    {
+        AiQueueTaskType.GoalToPrompt => "目标→提示词",
+        AiQueueTaskType.StockPick => "选股",
+        AiQueueTaskType.StrategyRefresh => "策略刷新",
+        _ => t.ToString()
+    };
+    var badge = Model.Status switch
+    {
+        AiQueueItemStatus.Pending => "secondary",
+        AiQueueItemStatus.Running => "primary",
+        AiQueueItemStatus.Succeeded => "success",
+        AiQueueItemStatus.Failed => "danger",
+        _ => "dark"
+    };
+    string Pretty(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "（空）";
+        var t = raw.Trim();
+        if ((t.StartsWith('{') && t.EndsWith('}')) || (t.StartsWith('[') && t.EndsWith(']')))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(t);
+                return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+            }
+            catch { /* keep raw */ }
+        }
+        return raw;
+    }
+    var jobLinkText = Model.TaskType == AiQueueTaskType.StrategyRefresh ? "策略 Job" : "选股 Job";
+}
+<div class="mb-3 d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+        <h2 class="mb-1">@Model.Title</h2>
+        <span class="badge bg-@badge">@Model.Status</span>
+        <span class="text-muted small ms-2">@TypeName(Model.TaskType)</span>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary btn-sm" asp-action="Queue">返回队列</a>
+        @if (Model.RelatedAiJobId.HasValue)
+        {
+            <a class="btn btn-outline-primary btn-sm" asp-action="Details" asp-route-id="@Model.RelatedAiJobId" asp-route-goalId="@Model.RelatedGoalId">@jobLinkText</a>
+        }
+        @if (Model.RelatedGoalId.HasValue)
+        {
+            <a class="btn btn-outline-primary btn-sm" asp-action="GoalDetails" asp-route-id="@Model.RelatedGoalId">投资目标</a>
+        }
+    </div>
+</div>
+
+<table class="table table-sm mb-3">
+    <tr><th style="width:8rem">标的</th><td>@(Model.Symbol ?? "—")</td></tr>
+    <tr><th>关联</th><td class="small text-muted">
+        Goal @(Model.RelatedGoalId?.ToString() ?? "—") ·
+        Job @(Model.RelatedAiJobId?.ToString() ?? "—") ·
+        PoolItem @(Model.RelatedPoolItemId?.ToString() ?? "—") ·
+        Corr @(Model.CorrelationId?.ToString() ?? "—")
+    </td></tr>
+    <tr><th>入队</th><td>@Model.CreationTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td></tr>
+    <tr><th>开始</th><td>@(Model.StartedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—")</td></tr>
+    <tr><th>结束</th><td>@(Model.CompletedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—")</td></tr>
+    <tr><th>Worker</th><td class="small">@(Model.WorkerId ?? "—")</td></tr>
+</table>
+
+@if (!string.IsNullOrWhiteSpace(Model.ErrorMessage))
+{
+    <div class="alert alert-danger"><strong>错误：</strong>@Model.ErrorMessage</div>
+}
+
+<div class="card mb-3">
+    <div class="card-header">输入（Input）</div>
+    <div class="card-body">
+        <pre class="mb-0 small" style="white-space:pre-wrap;max-height:420px;overflow:auto;">@Pretty(Model.InputPayload)</pre>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-header">返回结果（Output）</div>
+    <div class="card-body">
+        <pre class="mb-0 small" style="white-space:pre-wrap;max-height:480px;overflow:auto;">@(string.IsNullOrWhiteSpace(Model.OutputPayload) ? "（尚未产出或为空）" : Pretty(Model.OutputPayload))</pre>
+    </div>
+</div>

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - StockSim 模拟交易</title>
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body class="bg-light">
+<header>
+    <nav class="navbar navbar-expand-sm navbar-dark bg-dark mb-3">
+        <div class="container-fluid">
+            <a class="navbar-brand" asp-controller="Dashboard" asp-action="Index">StockSim</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="nav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item"><a class="nav-link" asp-controller="Dashboard" asp-action="Index">总览</a></li>
+                    <li class="nav-item"><a class="nav-link" asp-controller="Pools" asp-action="Index">股票池</a></li>
+                    <li class="nav-item"><a class="nav-link" asp-controller="Strategies" asp-action="Index">策略</a></li>
+                    <li class="nav-item"><a class="nav-link" asp-controller="Trades" asp-action="Index">成交</a></li>
+                    <li class="nav-item"><a class="nav-link" asp-controller="Trades" asp-action="Positions">持仓</a></li>
+                    <li class="nav-item"><a class="nav-link" asp-controller="Trades" asp-action="PnL">盈亏</a></li>
+                    <li class="nav-item"><a class="nav-link" asp-controller="Ai" asp-action="Index">AI选股</a></li>
+                    <li class="nav-item"><a class="nav-link" asp-controller="Ai" asp-action="Queue">AI队列</a></li>
+                    <li class="nav-item"><a class="nav-link" asp-controller="Ai" asp-action="Goals">目标达成</a></li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+</header>
+<div class="container">
+    @if (TempData["Msg"] != null)
+    {
+        var msgType = TempData["MsgType"] as string ?? "info";
+        <div class="alert alert-@msgType">@TempData["Msg"]</div>
+    }
+    <main class="pb-4">
+        @RenderBody()
+    </main>
+</div>
+<footer class="border-top footer text-muted py-3">
+    <div class="container small">
+        © 2026 StockSim — <strong>模拟交易，非实盘投资建议</strong>
+    </div>
+</footer>
+<script src="~/lib/jquery/dist/jquery.min.js"></script>
+<script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

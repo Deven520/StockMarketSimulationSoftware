@@ -1,0 +1,46 @@
+@model IReadOnlyList<StockSim.Application.Dtos.StrategyDto>
+@{
+    var pools = (IReadOnlyList<StockSim.Application.Dtos.StockPoolDto>)ViewBag.Pools;
+}
+<h2>策略中心</h2>
+<form asp-action="Create" method="post" class="row g-2 mb-3">
+    <div class="col-auto"><input name="name" class="form-control" placeholder="策略名" required /></div>
+    <div class="col-auto"><input name="description" class="form-control" placeholder="描述" /></div>
+    <div class="col-auto"><button class="btn btn-primary">新建</button></div>
+</form>
+@foreach (var s in Model)
+{
+    <div class="card mb-3 shadow-sm">
+        <div class="card-body">
+            <div class="d-flex justify-content-between">
+                <h5>@s.Name <small class="text-muted">v@s.CurrentVersion</small></h5>
+                <form asp-action="Toggle" method="post">
+                    <input type="hidden" name="id" value="@s.Id" />
+                    <input type="hidden" name="enabled" value="@(!s.IsEnabled)" />
+                    <button class="btn btn-sm @(s.IsEnabled ? "btn-success" : "btn-secondary")">@(s.IsEnabled ? "已启用" : "已停用")</button>
+                </form>
+            </div>
+            <p>@s.Description</p>
+            <form asp-action="UpdateParams" method="post" class="mb-2">
+                <input type="hidden" name="id" value="@s.Id" />
+                <textarea name="parametersJson" class="form-control font-monospace" rows="8">@s.ParametersJson</textarea>
+                <div class="mt-2 d-flex gap-2">
+                    <input name="changeNote" class="form-control" placeholder="变更说明" />
+                    <button class="btn btn-outline-primary">保存新版本</button>
+                </div>
+            </form>
+            <form asp-action="Bind" method="post" class="row g-2">
+                <input type="hidden" name="strategyId" value="@s.Id" />
+                <div class="col-auto">
+                    <select name="poolId" class="form-select">
+                        @foreach (var p in pools)
+                        {
+                            <option value="@p.Id">@p.Name</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-auto"><button class="btn btn-outline-secondary">绑定股票池</button></div>
+            </form>
+        </div>
+    </div>
+}

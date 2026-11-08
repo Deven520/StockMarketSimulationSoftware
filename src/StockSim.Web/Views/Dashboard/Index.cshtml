@@ -1,0 +1,32 @@
+@model StockSim.Application.Dtos.DashboardDto
+@{
+    var history = (IReadOnlyList<StockSim.Application.Dtos.DailyPnLDto>)ViewBag.History;
+}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0">监控总览</h2>
+    <span class="badge bg-warning text-dark">@Model.Disclaimer</span>
+</div>
+<div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">现金</div><div class="fs-4">@Model.Cash.ToString("N2")</div></div></div></div>
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">持仓成本市值</div><div class="fs-4">@Model.PositionMarketValue.ToString("N2")</div></div></div></div>
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">总资产</div><div class="fs-4">@Model.TotalAssets.ToString("N2")</div></div></div></div>
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">今日盈亏 / 成交</div><div class="fs-4">@Model.TodayPnL.ToString("N2") / @Model.TodayTradeCount</div></div></div></div>
+</div>
+<p class="text-muted">交易模式：@Model.TradingMode</p>
+<h4>近30日盈亏</h4>
+<table class="table table-sm table-striped">
+    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th></tr></thead>
+    <tbody>
+    @foreach (var x in history)
+    {
+        <tr>
+            <td>@x.TradeDate.ToString("yyyy-MM-dd")</td>
+            <td>@x.Symbol</td>
+            <td>@x.TradeCount</td>
+            <td>@x.RealizedPnL.ToString("N2")</td>
+            <td>@x.Fees.ToString("N2")</td>
+            <td>@((x.WinRate * 100).ToString("N1"))%</td>
+        </tr>
+    }
+    </tbody>
+</table>

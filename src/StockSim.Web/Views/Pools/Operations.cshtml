@@ -1,0 +1,84 @@
+@model StockSim.Application.Dtos.StockOperationsPageDto
+@{
+    var pnlUp = (Model.UnrealizedPnL ?? 0) >= 0;
+}
+<div class="mb-3 d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+        <h2 class="mb-1">@Model.Name (@Model.Symbol) · 操作明细</h2>
+        <div class="text-muted small">策略自动高卖低买产生的成交与拒单记录</div>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" asp-action="Index">返回股票池</a>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-auto">
+        <div class="border rounded px-3 py-2">
+            <div class="text-muted small">初始资金</div>
+            <div class="fs-5">@Model.InitialCash.ToString("N0")</div>
+        </div>
+    </div>
+    <div class="col-auto">
+        <div class="border rounded px-3 py-2">
+            <div class="text-muted small">可用资金</div>
+            <div class="fs-5">@Model.AvailableCash.ToString("N0")</div>
+        </div>
+    </div>
+    <div class="col-auto">
+        <div class="border rounded px-3 py-2">
+            <div class="text-muted small">持仓 / 成本</div>
+            <div class="fs-5">@Model.PositionQty · @(Model.PositionQty > 0 ? Model.AvgCost.ToString("N2") : "-")</div>
+        </div>
+    </div>
+    <div class="col-auto">
+        <div class="border rounded px-3 py-2">
+            <div class="text-muted small">最新价</div>
+            <div class="fs-5">@(Model.LastPrice?.ToString("N2") ?? "-")</div>
+        </div>
+    </div>
+    <div class="col-auto">
+        <div class="border rounded px-3 py-2">
+            <div class="text-muted small">浮动盈亏</div>
+            <div class="fs-5 @(pnlUp ? "text-danger" : "text-success")">@(Model.UnrealizedPnL?.ToString("N2") ?? "-")</div>
+        </div>
+    </div>
+</div>
+
+<div class="table-responsive">
+<table class="table table-sm table-hover align-middle">
+    <thead class="table-light">
+        <tr>
+            <th>时间</th>
+            <th>类型</th>
+            <th>方向</th>
+            <th>数量</th>
+            <th>价格</th>
+            <th>费用</th>
+            <th>状态</th>
+            <th>备注</th>
+        </tr>
+    </thead>
+    <tbody>
+    @if (Model.Operations.Count == 0)
+    {
+        <tr><td colspan="8" class="text-muted text-center py-4">暂无操作记录（开市后策略会自动做 T）</td></tr>
+    }
+    else
+    {
+        foreach (var o in Model.Operations)
+        {
+            var buy = o.Side == "买入";
+            <tr>
+                <td>@o.Time.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                <td>@o.Kind</td>
+                <td class="@(buy ? "text-danger" : "text-success")">@o.Side</td>
+                <td>@o.Quantity</td>
+                <td>@o.Price.ToString("N2")</td>
+                <td>@(o.Fee?.ToString("N2") ?? "-")</td>
+                <td>@(o.Status ?? "-")</td>
+                <td class="small text-muted">@(o.Remark ?? "")</td>
+            </tr>
+        }
+    }
+    </tbody>
+</table>
+</div>

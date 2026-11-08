@@ -1,0 +1,18 @@
+@model IReadOnlyList<StockSim.Application.Dtos.PositionDto>
+<h2>持仓</h2>
+<table class="table table-striped">
+    <thead><tr><th>代码</th><th>名称</th><th>底仓</th><th>持仓</th><th>可卖</th><th>成本</th></tr></thead>
+    <tbody>
+    @foreach (var p in Model)
+    {
+        <tr>
+            <td>@p.Symbol</td>
+            <td>@p.Name</td>
+            <td>@p.BaseQuantity</td>
+            <td>@p.Quantity</td>
+            <td>@p.SellableQuantity</td>
+            <td>@p.AvgCost.ToString("N4")</td>
+        </tr>
+    }
+    </tbody>
+</table>

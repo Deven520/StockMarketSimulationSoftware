@@ -1,0 +1,299 @@
+@model IReadOnlyList<StockSim.Application.Dtos.PoolStockRowDto>
+@using StockSim.Domain.Strategies
+@{
+    Guid poolId = ViewBag.PoolId;
+    var poolName = (string)(ViewBag.PoolName ?? "股票池");
+    var session = Model.FirstOrDefault()?.MarketSessionText ?? "-";
+    var forecastTarget = Model.FirstOrDefault(x => x.ForecastForDate.HasValue)?.ForecastForDate
+                         ?? PriceForecastMetrics.ResolveForecastTargetDate(DateTime.Now);
+    var forecastCol = $"预测高/低 ({forecastTarget:MM-dd})";
+}
+<div class="mb-3">
+    <h2 class="mb-1">股票池</h2>
+    <div class="text-muted small">
+        代码或名称填其一即可（支持模糊联想）；入池先挂默认策略，后台异步 AI 优化。
+        每股初始资金 20 万，开市连续竞价自动高卖低买。可对单股开启「成交通知」。时段：@session
+        <span id="quoteStatus" class="ms-2 text-muted">行情加载中…</span>
+    </div>
+</div>
+
+<form asp-action="AddItem" method="post" class="row g-2 mb-2 position-relative" id="addStockForm" autocomplete="off">
+    <input type="hidden" name="poolId" value="@poolId" />
+    <div class="col-md-3 position-relative">
+        <input id="symbolInput" name="symbol" class="form-control" placeholder="股票代码（可空）" />
+        <div id="suggestBox" class="list-group position-absolute w-100 shadow-sm d-none" style="z-index:1050; max-height:240px; overflow:auto;"></div>
+    </div>
+    <div class="col-md-3 position-relative">
+        <input id="nameInput" name="name" class="form-control" placeholder="股票名称（可空）" />
+    </div>
+    <div class="col-md-2"><input name="tags" class="form-control" placeholder="标签" /></div>
+    <div class="col-auto"><button class="btn btn-primary" type="submit">添加</button></div>
+    <div class="col-12"><span class="text-muted small">代码、名称至少填一项；输入时弹出联想，点选即可。</span></div>
+</form>
+<div class="row g-2 mb-3 align-items-center">
+    <div class="col-auto">
+        <form asp-action="Import" method="post" enctype="multipart/form-data" class="row g-2">
+            <input type="hidden" name="poolId" value="@poolId" />
+            <div class="col-auto"><input type="file" name="file" class="form-control" accept=".csv" required /></div>
+            <div class="col-auto"><button class="btn btn-outline-secondary">CSV导入</button></div>
+        </form>
+    </div>
+    <div class="col-auto">
+        <form asp-action="TestNotify" method="post" class="d-inline">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="poolId" value="@poolId" />
+            <button type="submit" class="btn btn-outline-info" title="向 Webhook/PushPlus 发一条测试消息（使用 Web 的 Alerts 配置）">监控测试</button>
+        </form>
+    </div>
+    <div class="col-auto">
+        <form asp-action="RefreshAllStrategies" method="post" class="d-inline"
+              onsubmit="return confirm('将对池内全部股票执行 AI 策略刷新（与每晚 22:00 相同），可能较久，确认？');">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="poolId" value="@poolId" />
+            <button type="submit" class="btn btn-outline-warning"
+                    title="等同 Worker 夜更；Worker 未在 22:00 运行时可在此补跑">全池AI刷新</button>
+        </form>
+    </div>
+</div>
+
+<div class="table-responsive">
+<table class="table table-sm table-hover align-middle stock-pool-table" id="poolTable" data-pool-id="@poolId">
+    <thead class="table-dark">
+        <tr>
+            <th>代码</th>
+            <th>名称</th>
+            <th>最新价</th>
+            <th>涨跌幅</th>
+            <th>持仓</th>
+            <th>成本</th>
+            <th>市值</th>
+            <th>浮动盈亏</th>
+            <th>今日盈亏</th>
+            <th>可用资金</th>
+            <th title="下一开盘日高低价预测（开市前为当日，否则下一交易日）">@forecastCol</th>
+            <th>专属策略</th>
+            <th>策略状态</th>
+            <th>成交通知</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+    @foreach (var i in Model)
+    {
+        var dayUp = (i.TodayRealizedPnL ?? 0) >= 0;
+        <tr data-symbol="@i.Symbol" data-qty="@i.PositionQty" data-avg="@i.AvgCost">
+            <td>
+                <a asp-action="Stock" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId" class="fw-semibold text-decoration-none">@i.Symbol</a>
+            </td>
+            <td>@i.Name</td>
+            <td class="js-last text-muted">…</td>
+            <td class="js-chg text-muted">…</td>
+            <td>@i.PositionQty</td>
+            <td>@(i.PositionQty > 0 ? i.AvgCost.ToString("N2") : "-")</td>
+            <td class="js-mv text-muted">…</td>
+            <td class="js-upnl text-muted">…</td>
+            <td class="@(dayUp ? "text-danger" : "text-success")">@(i.TodayRealizedPnL?.ToString("N2") ?? "-")</td>
+            <td>@i.AvailableCash.ToString("N0")</td>
+            <td class="small">
+                @if (i.PredictedHigh.HasValue && i.PredictedLow.HasValue)
+                {
+                    <div class="fw-semibold">@i.PredictedHigh.Value.ToString("N2") / @i.PredictedLow.Value.ToString("N2")</div>
+                    <div class="text-muted">@(i.ForecastForDate?.ToString("MM-dd") ?? "-") · @(i.ForecastStatus ?? "-")</div>
+                }
+                else
+                {
+                    <span class="text-muted">暂无</span>
+                }
+            </td>
+            <td class="small">
+                @if (i.BoundStrategyId.HasValue)
+                {
+                    <div>@(i.StrategyName ?? i.BoundStrategyId.Value.ToString()[..8])</div>
+                    @if (i.StrategyUpdatedAt.HasValue)
+                    {
+                        <div class="text-muted">更新 @i.StrategyUpdatedAt.Value.ToLocalTime().ToString("MM-dd HH:mm")</div>
+                    }
+                }
+                else
+                {
+                    <span class="text-muted">未生成</span>
+                }
+            </td>
+            <td>
+                @if (i.IsStrategyRunning)
+                {
+                    <span class="badge bg-success">运行中</span>
+                }
+                else
+                {
+                    <span class="badge bg-secondary">未运行</span>
+                    @if (!i.HasActiveStrategy)
+                    {
+                        <span class="text-muted small ms-1">无启用策略</span>
+                    }
+                    else if (!i.IsMarketOpen)
+                    {
+                        <span class="text-muted small ms-1">非开市</span>
+                    }
+                }
+            </td>
+            <td>
+                <form asp-action="SetNotifyOnTrade" method="post" class="d-inline">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="poolId" value="@poolId" />
+                    <input type="hidden" name="itemId" value="@i.Id" />
+                    @* 用 1/0，避免 bool 绑定 True/False 在部分环境下落到 false *@
+                    <input type="hidden" name="notifyOn" value="@(i.NotifyOnTrade ? "0" : "1")" />
+                    <button type="submit"
+                            class="btn btn-sm @(i.NotifyOnTrade ? "btn-success" : "btn-outline-secondary")"
+                            title="策略成交后推送微信 Webhook / PushPlus（需在 Worker 的 Alerts 配置中启用）">
+                        @(i.NotifyOnTrade ? "监控中" : "未监控")
+                    </button>
+                </form>
+                <form asp-action="TestNotify" method="post" class="d-inline ms-1">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="poolId" value="@poolId" />
+                    <input type="hidden" name="itemId" value="@i.Id" />
+                    <button type="submit" class="btn btn-sm btn-outline-info" title="用该股信息发一条测试推送">测试</button>
+                </form>
+            </td>
+            <td class="text-nowrap">
+                <a class="btn btn-sm btn-outline-info" asp-action="Operations" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId">明细</a>
+                <a class="btn btn-sm btn-outline-primary" asp-action="Stock" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId">行情</a>
+                <form asp-action="RefreshStrategy" method="post" class="d-inline">
+                    <input type="hidden" name="poolId" value="@poolId" />
+                    <input type="hidden" name="itemId" value="@i.Id" />
+                    <button class="btn btn-sm btn-outline-warning" title="立即用行情+热点新闻刷新专属策略">AI刷新</button>
+                </form>
+                <form asp-action="RemoveItem" method="post" class="d-inline">
+                    <input type="hidden" name="poolId" value="@poolId" />
+                    <input type="hidden" name="itemId" value="@i.Id" />
+                    <button class="btn btn-sm btn-outline-danger">移除</button>
+                </form>
+            </td>
+        </tr>
+    }
+    </tbody>
+</table>
+</div>
+
+<script>
+(function () {
+    const symbolInput = document.getElementById('symbolInput');
+    const nameInput = document.getElementById('nameInput');
+    const box = document.getElementById('suggestBox');
+    let timer = null;
+    let activeInput = null;
+
+    function hide() { box.classList.add('d-none'); box.innerHTML = ''; }
+
+    function show(list) {
+        if (!list || !list.length) { hide(); return; }
+        box.innerHTML = list.map(x =>
+            `<button type="button" class="list-group-item list-group-item-action py-1"
+                data-symbol="${x.symbol}" data-name="${x.name}">
+                <span class="fw-semibold">${x.symbol}</span>
+                <span class="ms-2">${x.name}</span>
+                ${x.market ? `<span class="text-muted small ms-2">${x.market}</span>` : ''}
+             </button>`).join('');
+        box.classList.remove('d-none');
+        const host = activeInput === nameInput ? nameInput.parentElement : symbolInput.parentElement;
+        if (box.parentElement !== host) host.appendChild(box);
+    }
+
+    function pick(symbol, name) {
+        symbolInput.value = symbol;
+        nameInput.value = name;
+        hide();
+    }
+
+    box.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-symbol]');
+        if (!btn) return;
+        pick(btn.dataset.symbol, btn.dataset.name);
+    });
+
+    function queryFrom(el) {
+        activeInput = el;
+        const q = el.value.trim();
+        clearTimeout(timer);
+        if (q.length < 1) { hide(); return; }
+        timer = setTimeout(async () => {
+            try {
+                const res = await fetch(`/Pools/Suggest?q=${encodeURIComponent(q)}`);
+                if (!res.ok) { hide(); return; }
+                show(await res.json());
+            } catch { hide(); }
+        }, 220);
+    }
+
+    symbolInput.addEventListener('input', () => queryFrom(symbolInput));
+    nameInput.addEventListener('input', () => queryFrom(nameInput));
+    document.addEventListener('click', e => {
+        if (!e.target.closest('#addStockForm')) hide();
+    });
+
+    document.getElementById('addStockForm').addEventListener('submit', e => {
+        if (!symbolInput.value.trim() && !nameInput.value.trim()) {
+            e.preventDefault();
+            alert('请填写股票代码或名称（至少一项）');
+        }
+    });
+
+    // —— 首屏后异步刷轻量行情 ——
+    const table = document.getElementById('poolTable');
+    const statusEl = document.getElementById('quoteStatus');
+    const poolId = table?.dataset.poolId;
+    if (!poolId) return;
+
+    function fmt(n, digits) {
+        if (n == null || Number.isNaN(n)) return '-';
+        return Number(n).toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    }
+    function setTone(el, value) {
+        el.classList.remove('text-danger', 'text-success', 'text-muted');
+        if (value == null) { el.classList.add('text-muted'); return; }
+        el.classList.add(value >= 0 ? 'text-danger' : 'text-success');
+    }
+
+    async function refreshQuotes() {
+        try {
+            const res = await fetch(`/Pools/Quotes?poolId=${encodeURIComponent(poolId)}`);
+            if (!res.ok) throw new Error('http ' + res.status);
+            const list = await res.json();
+            const map = Object.fromEntries(list.map(x => [String(x.symbol).toUpperCase(), x]));
+            table.querySelectorAll('tbody tr[data-symbol]').forEach(tr => {
+                const sym = tr.dataset.symbol.toUpperCase();
+                const q = map[sym];
+                const lastEl = tr.querySelector('.js-last');
+                const chgEl = tr.querySelector('.js-chg');
+                const mvEl = tr.querySelector('.js-mv');
+                const upnlEl = tr.querySelector('.js-upnl');
+                if (!q) {
+                    lastEl.textContent = '-';
+                    chgEl.textContent = '-';
+                    mvEl.textContent = '-';
+                    upnlEl.textContent = '-';
+                    return;
+                }
+                lastEl.textContent = fmt(q.lastPrice, 2);
+                setTone(lastEl, q.changePercent);
+                chgEl.textContent = q.changePercent == null ? '-' : ((q.changePercent >= 0 ? '+' : '') + Number(q.changePercent).toFixed(2) + '%');
+                setTone(chgEl, q.changePercent);
+                mvEl.textContent = q.marketValue == null ? '-' : fmt(q.marketValue, 0);
+                mvEl.classList.remove('text-muted');
+                upnlEl.textContent = q.unrealizedPnL == null ? '-' : fmt(q.unrealizedPnL, 2);
+                setTone(upnlEl, q.unrealizedPnL);
+            });
+            statusEl.textContent = '行情已更新 ' + new Date().toLocaleTimeString();
+            statusEl.classList.remove('text-danger');
+            statusEl.classList.add('text-muted');
+        } catch (e) {
+            statusEl.textContent = '行情加载失败';
+            statusEl.classList.add('text-danger');
+        }
+    }
+
+    refreshQuotes();
+})();
+</script>

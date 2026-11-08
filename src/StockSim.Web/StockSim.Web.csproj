@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>aspnet-StockSim.Web-bc84ef8e-340b-43b4-b48b-0387ae4dd951</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Update="app.db" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\StockSim.Application\StockSim.Application.csproj" />
+    <ProjectReference Include="..\StockSim.Infrastructure\StockSim.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\adapters\StockSim.MarketData.Replay\StockSim.MarketData.Replay.csproj" />
+    <ProjectReference Include="..\..\adapters\StockSim.AI.Cursor\StockSim.AI.Cursor.csproj" />
+  </ItemGroup>
+
+</Project>

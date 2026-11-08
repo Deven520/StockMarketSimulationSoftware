@@ -1,0 +1,21 @@
+@model IReadOnlyList<StockSim.Application.Dtos.DailyPnLDto>
+<div class="d-flex justify-content-between mb-3">
+    <h2>盈亏分析</h2>
+    <form asp-action="Settle" method="post"><button class="btn btn-outline-primary">执行今日日终结算</button></form>
+</div>
+<table class="table table-sm table-striped">
+    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th></tr></thead>
+    <tbody>
+    @foreach (var x in Model)
+    {
+        <tr>
+            <td>@x.TradeDate.ToString("yyyy-MM-dd")</td>
+            <td>@x.Symbol</td>
+            <td>@x.TradeCount</td>
+            <td>@x.RealizedPnL.ToString("N2")</td>
+            <td>@x.Fees.ToString("N2")</td>
+            <td>@((x.WinRate * 100).ToString("N1"))%</td>
+        </tr>
+    }
+    </tbody>
+</table>

@@ -1,0 +1,113 @@
+@model StockSim.Application.Dtos.InvestmentGoalDetailDto
+@{
+    var g = Model.Goal;
+}
+<div class="mb-3 d-flex justify-content-between align-items-start flex-wrap gap-2">
+    <div>
+        <h2 class="mb-1">目标详情</h2>
+        <div class="text-muted">@g.ThemePreference · 预期 @g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.Status</div>
+    </div>
+    <div class="d-flex gap-2">
+        <form asp-action="RefreshGoalProgress" method="post" class="d-inline">
+            <input type="hidden" name="id" value="@g.Id" />
+            <button class="btn btn-outline-primary btn-sm">刷新今日达成率</button>
+        </form>
+        <a class="btn btn-outline-secondary btn-sm" asp-action="Goals">返回列表</a>
+        @if (g.StockPickJobId.HasValue)
+        {
+            <a class="btn btn-outline-secondary btn-sm" asp-action="Details" asp-route-id="@g.StockPickJobId" asp-route-goalId="@g.Id">选股任务</a>
+        }
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-md-3">
+        <div class="border rounded p-3">
+            <div class="text-muted small">最新达成率</div>
+            <div class="fs-4">@(g.LatestAchievementRate?.ToString("N1") ?? "-")%</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="border rounded p-3">
+            <div class="text-muted small">组合收益</div>
+            <div class="fs-4">@(g.LatestPortfolioReturnPct?.ToString("N2") ?? "-")%</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="border rounded p-3">
+            <div class="text-muted small">起止</div>
+            <div>@(g.StartDate?.ToString("yyyy-MM-dd") ?? "-") ~ @(g.TargetEndDate?.ToString("yyyy-MM-dd") ?? "-")</div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="border rounded p-3">
+            <div class="text-muted small">入选股票</div>
+            <div class="fs-4">@g.StockCount</div>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(g.GeneratedPrompt))
+{
+    <div class="card mb-3">
+        <div class="card-header">AI 生成的选股提示词</div>
+        <div class="card-body"><pre class="mb-0 small" style="white-space:pre-wrap;">@g.GeneratedPrompt</pre></div>
+    </div>
+}
+
+<h5>入选股票</h5>
+<table class="table table-sm mb-4">
+    <thead><tr><th>代码</th><th>名称</th><th>基准资金</th><th>选取逻辑</th><th>风险</th></tr></thead>
+    <tbody>
+    @foreach (var s in Model.Stocks)
+    {
+        var logic = !string.IsNullOrWhiteSpace(s.SelectionLogic) ? s.SelectionLogic : s.Reason;
+        <tr>
+            <td>@s.Symbol</td>
+            <td>@s.Name</td>
+            <td>@s.BaselineCash.ToString("N0")</td>
+            <td class="small" style="white-space:pre-wrap;max-width:28rem;">@(logic ?? "—")</td>
+            <td class="small text-muted">@(s.Risk ?? "—")</td>
+        </tr>
+    }
+    @if (Model.Stocks.Count == 0)
+    {
+        <tr><td colspan="5" class="text-muted">尚未确认入选</td></tr>
+    }
+    </tbody>
+</table>
+
+<h5>每日达成率</h5>
+<table class="table table-sm table-hover">
+    <thead>
+    <tr>
+        <th>日期</th>
+        <th>天数</th>
+        <th>组合收益%</th>
+        <th>达成率%</th>
+        <th>市值合计</th>
+        <th>已实现</th>
+        <th>浮动</th>
+        <th>备注</th>
+    </tr>
+    </thead>
+    <tbody>
+    @foreach (var p in Model.Progress.OrderByDescending(x => x.TradeDate))
+    {
+        <tr>
+            <td>@p.TradeDate.ToString("yyyy-MM-dd")</td>
+            <td>@p.DayIndex</td>
+            <td>@p.PortfolioReturnPct.ToString("N2")</td>
+            <td>@p.AchievementRate.ToString("N1")</td>
+            <td>@p.TotalMarketValue.ToString("N0")</td>
+            <td>@p.RealizedPnL.ToString("N2")</td>
+            <td>@p.UnrealizedPnL.ToString("N2")</td>
+            <td class="small text-muted">@p.Notes</td>
+        </tr>
+    }
+    @if (Model.Progress.Count == 0)
+    {
+        <tr><td colspan="8" class="text-muted text-center py-3">暂无进度（确认入选后开始记录）</td></tr>
+    }
+    </tbody>
+</table>

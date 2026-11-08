@@ -1,0 +1,33 @@
+@model IReadOnlyList<StockSim.Application.Dtos.TradeDto>
+@using StockSim.Domain.Enums
+<h2>成交明细</h2>
+<form asp-action="Manual" method="post" class="row g-2 mb-3">
+    <div class="col-auto"><input name="symbol" class="form-control" placeholder="代码" required /></div>
+    <div class="col-auto">
+        <select name="side" class="form-select">
+            <option value="@OrderSide.Buy">买入</option>
+            <option value="@OrderSide.Sell">卖出</option>
+        </select>
+    </div>
+    <div class="col-auto"><input name="quantity" type="number" class="form-control" value="100" step="100" required /></div>
+    <div class="col-auto"><input name="price" type="number" step="0.01" class="form-control" placeholder="价格" required /></div>
+    <div class="col-auto"><button class="btn btn-primary">手工模拟下单</button></div>
+</form>
+<table class="table table-sm table-striped">
+    <thead><tr><th>时间</th><th>日期</th><th>代码</th><th>方向</th><th>数量</th><th>价格</th><th>金额</th><th>费用</th></tr></thead>
+    <tbody>
+    @foreach (var t in Model)
+    {
+        <tr>
+            <td>@t.TradedAt.ToLocalTime().ToString("HH:mm:ss")</td>
+            <td>@t.TradeDate.ToString("yyyy-MM-dd")</td>
+            <td>@t.Symbol</td>
+            <td>@t.Side</td>
+            <td>@t.Quantity</td>
+            <td>@t.Price.ToString("N2")</td>
+            <td>@t.Amount.ToString("N2")</td>
+            <td>@t.TotalFee.ToString("N2")</td>
+        </tr>
+    }
+    </tbody>
+</table>

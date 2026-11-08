@@ -1,0 +1,462 @@
+@model StockSim.Application.Dtos.StockDetailPageDto
+@{
+    var b = Model.Bundle.Board;
+    var f = Model.Bundle.Fundamentals;
+    var flow = Model.Bundle.FundFlow;
+    var up = b.ChangePercent >= 0;
+    var color = up ? "#e74c3c" : "#1abc9c";
+    var daily = Model.Bundle.DailyBars;
+    var minutes = Model.Bundle.MinuteBars;
+}
+<link rel="stylesheet" href="~/css/stock-terminal.css" asp-append-version="true" />
+
+<div class="ths-terminal">
+    <div class="ths-topbar d-flex justify-content-between align-items-start flex-wrap gap-2">
+        <div>
+            <div class="ths-title">
+                <span class="ths-name">@b.Name</span>
+                <span class="ths-code">@b.Symbol</span>
+                @if (Model.IsStrategyRunning)
+                {
+                    <span class="badge bg-success ms-2">策略运行中</span>
+                }
+                else
+                {
+                    <span class="badge bg-secondary ms-2">策略未运行</span>
+                }
+                <span class="ths-session ms-2">@Model.MarketSessionText</span>
+            </div>
+            <div class="ths-price" style="color:@color">
+                <span class="ths-last">@b.Last.ToString("N2")</span>
+                <span class="ths-chg">@b.Change.ToString("+0.00;-0.00")　@b.ChangePercent.ToString("+0.00;-0.00")%</span>
+            </div>
+            <div class="ths-meta text-muted small">
+                开 @b.Open.ToString("N2")　高 @b.High.ToString("N2")　低 @b.Low.ToString("N2")　昨收 @b.PreClose.ToString("N2")
+               　额 @((b.Amount / 100000000m).ToString("N2"))亿　换手 @b.TurnoverRate.ToString("N2")%
+               　更新 @b.AsOf.ToString("HH:mm:ss")
+            </div>
+        </div>
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+            @if (Model.PoolId.HasValue && Model.PoolItemId.HasValue)
+            {
+                <form asp-action="RefreshStrategy" method="post" class="d-inline">
+                    <input type="hidden" name="poolId" value="@Model.PoolId" />
+                    <input type="hidden" name="itemId" value="@Model.PoolItemId" />
+                    <input type="hidden" name="symbol" value="@b.Symbol" />
+                    <input type="hidden" name="returnTo" value="stock" />
+                    <button class="btn btn-sm btn-warning" type="submit" title="立即 AI 刷新策略并生成次日高低预测">AI刷新预测</button>
+                </form>
+            }
+            @if (Model.PoolId.HasValue)
+            {
+                <a class="btn btn-sm btn-outline-light" asp-action="Index">返回股票池</a>
+            }
+            <a class="btn btn-sm btn-outline-light" asp-action="Index">池列表</a>
+        </div>
+    </div>
+
+    <div class="row g-2 mt-2">
+        <div class="col-lg-9">
+            <div class="ths-panel">
+                <div class="ths-panel-hd d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span id="intradayTitle">分时 / 分K（点击下方日K切换日期）</span>
+                    <span id="intradayMeta" class="small"></span>
+                </div>
+                <div id="chartMinute" class="ths-chart"></div>
+            </div>
+            <div class="ths-panel mt-2">
+                <div class="ths-panel-hd">日K · 近一年（点击K线查看该日分时K）</div>
+                <div id="chartDaily" class="ths-chart ths-chart-lg"></div>
+            </div>
+        </div>
+        <div class="col-lg-3">
+            <div class="ths-panel">
+                <div class="ths-panel-hd">估值 / 概况</div>
+                <table class="ths-kv">
+                    <tr><td>市盈率(TTM)</td><td>@(f.PeTtm?.ToString("N2") ?? "-")</td></tr>
+                    <tr><td>市净率</td><td>@(f.Pb?.ToString("N2") ?? "-")</td></tr>
+                    <tr><td>市销率(TTM)</td><td>@(f.PsTtm?.ToString("N2") ?? "-")</td></tr>
+                    <tr><td>总市值</td><td>@(f.TotalMarketCapYi?.ToString("N2") ?? "-") 亿</td></tr>
+                    <tr><td>流通市值</td><td>@(f.CircMarketCapYi?.ToString("N2") ?? "-") 亿</td></tr>
+                    <tr><td>ROE</td><td>@(f.Roe?.ToString("N2") ?? "-")%</td></tr>
+                    <tr><td>行业</td><td>@(f.Industry ?? "-")</td></tr>
+                </table>
+            </div>
+            <div class="ths-panel mt-2">
+                <div class="ths-panel-hd">资金流向</div>
+                <table class="ths-kv">
+                    <tr><td>主力净流入</td><td class="@(flow.MainNetInflow>=0?"up":"down")">@FormatYi(flow.MainNetInflow)</td></tr>
+                    <tr><td>主力流入</td><td class="up">@FormatYi(flow.MainInflow)</td></tr>
+                    <tr><td>主力流出</td><td class="down">@FormatYi(flow.MainOutflow)</td></tr>
+                    <tr><td>超大单净额</td><td class="@(flow.SuperLargeNet>=0?"up":"down")">@FormatYi(flow.SuperLargeNet)</td></tr>
+                    <tr><td>大单净额</td><td class="@(flow.LargeNet>=0?"up":"down")">@FormatYi(flow.LargeNet)</td></tr>
+                    <tr><td>中单净额</td><td class="@(flow.MediumNet>=0?"up":"down")">@FormatYi(flow.MediumNet)</td></tr>
+                    <tr><td>小单净额</td><td class="@(flow.SmallNet>=0?"up":"down")">@FormatYi(flow.SmallNet)</td></tr>
+                    <tr><td>散户净流入</td><td class="@(flow.RetailNetInflow>=0?"up":"down")">@FormatYi(flow.RetailNetInflow)</td></tr>
+                </table>
+            </div>
+            <div class="ths-panel mt-2">
+                <div class="ths-panel-hd">策略运行</div>
+                <div class="p-2 small">
+                    <div>状态：
+                        @if (Model.IsStrategyRunning)
+                        { <strong class="text-success">运行中</strong> }
+                        else
+                        { <strong class="text-secondary">未运行</strong> }
+                    </div>
+                    <div class="text-muted mt-1">
+                        已绑定启用策略：@(Model.HasActiveStrategy ? "是" : "否")　｜　开市连续竞价：@(Model.IsMarketOpen ? "是" : "否")
+                    </div>
+                    <div class="text-muted">规则：策略启用且绑定本池/本股，并且当前为开市连续竞价时段 → 运行中；否则未运行。</div>
+                    <div class="text-muted mt-1">入池首日按行情建底仓；下一交易日起才自动做T（高抛低吸）。</div>
+                    <div class="text-muted mt-1">入池首日按行情建底仓；下一交易日起才自动做T。Worker 需在线。</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="ths-panel mt-2" id="forecast-history">
+        <div class="ths-panel-hd">高低价预测准确率历史</div>
+        @if (Model.ForecastHistory is not { Count: > 0 })
+        {
+            <div class="p-3 small text-muted">
+                暂无预测记录。请点击上方「AI刷新预测」，或等待每晚约 22:00 夜更。规则：开市前（交易日 09:30 前）预测当日高低，否则预测下一交易日高低。
+            </div>
+        }
+        else
+        {
+            <div class="table-responsive" style="max-height:320px;overflow:auto;">
+                <table class="table table-sm table-dark table-striped mb-0">
+                    <thead>
+                    <tr>
+                        <th>预测股票</th>
+                        <th>目标日</th>
+                        <th>预测高/低</th>
+                        <th>实际高/低</th>
+                        <th>偏差% 高/低</th>
+                        <th>准确率 综合</th>
+                        <th>状态</th>
+                        <th style="min-width:220px;">预测提示词</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var row in Model.ForecastHistory!)
+                    {
+                        <tr>
+                            <td>@row.Name @row.Symbol</td>
+                            <td>@row.ForecastForDate.ToString("yyyy-MM-dd")</td>
+                            <td>@row.PredictedHigh.ToString("N2") / @row.PredictedLow.ToString("N2")</td>
+                            <td>@(row.ActualHigh?.ToString("N2") ?? "-") / @(row.ActualLow?.ToString("N2") ?? "-")</td>
+                            <td>@(row.HighDeviationPct?.ToString("N2") ?? "-") / @(row.LowDeviationPct?.ToString("N2") ?? "-")</td>
+                            <td>@(row.CombinedAccuracyPct?.ToString("N1") ?? "-")</td>
+                            <td>@row.Status</td>
+                            <td class="small" style="white-space:pre-wrap;word-break:break-word;max-width:360px;" title="@(row.Prompt ?? "")">@(string.IsNullOrWhiteSpace(row.Prompt) ? "-" : row.Prompt)</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+            <div class="small text-muted p-2">
+                每晚约 22:00（及补跑）仅用真源日K对账目标日高低并写入准确率；未收盘/无日K/模拟行情不对账，已误写可在日K到位后重算。容差默认 1.5%。开市前预测当日，否则预测下一交易日。
+                @if (Model.AvgCombinedAccuracyPct.HasValue)
+                {
+                    <span>近史平均综合准确率：@Model.AvgCombinedAccuracyPct?.ToString("N1")。</span>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="ths-panel mt-2">
+        <div class="ths-panel-hd">近一年日线开盘 / 收盘（表，可点击日期）</div>
+        <div class="table-responsive" style="max-height:260px;overflow:auto;">
+            <table class="table table-sm table-dark table-striped mb-0">
+                <thead><tr><th>日期</th><th>开盘</th><th>最高</th><th>最低</th><th>收盘</th><th>成交量</th></tr></thead>
+                <tbody>
+                @foreach (var d in daily.OrderByDescending(x => x.Date).Take(60))
+                {
+                    <tr class="daily-row" role="button" data-date="@d.Date.ToString("yyyy-MM-dd")" title="点击查看该日分时K">
+                        <td>@d.Date.ToString("yyyy-MM-dd")</td>
+                        <td>@d.Open.ToString("N2")</td>
+                        <td>@d.High.ToString("N2")</td>
+                        <td>@d.Low.ToString("N2")</td>
+                        <td>@d.Close.ToString("N2")</td>
+                        <td>@d.Volume.ToString("N0")</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+        <div class="small text-muted p-2">表内展示最近60个交易日；图为完整约一年。@Model.Bundle.DataSourceNote</div>
+    </div>
+</div>
+
+@functions {
+    string FormatYi(decimal v)
+    {
+        var yi = v / 100000000m;
+        return yi.ToString("+0.00;-0.00") + "亿";
+    }
+}
+
+@section Scripts {
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script>
+(() => {
+  const symbol = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(b.Symbol));
+  const dailyDates = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(daily.Select(d => d.Date.ToString("yyyy-MM-dd"))));
+  const dailyOhlc = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(daily.Select(d => new[] { (double)d.Open, (double)d.Close, (double)d.Low, (double)d.High })));
+  const dailyVol = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(daily.Select(d => d.Volume)));
+  const minuteTimes = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(minutes.Select(m => m.Time.ToString("HH:mm"))));
+  const minuteClose = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(minutes.Select(m => (double)m.Close)));
+  const minuteOhlc = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(minutes.Select(m => new[] { (double)m.Open, (double)m.Close, (double)m.Low, (double)m.High })));
+  const preClose = @(b.PreClose.ToString(System.Globalization.CultureInfo.InvariantCulture));
+  const intradayUrl = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Url.Action("Intraday", "Pools")));
+
+  const minuteChart = echarts.init(document.getElementById('chartMinute'));
+  const dailyChart = echarts.init(document.getElementById('chartDaily'));
+  const titleEl = document.getElementById('intradayTitle');
+  const metaEl = document.getElementById('intradayMeta');
+
+  function pctVsPre(price, pre) {
+    const p = Number(pre);
+    if (!p) return null;
+    return (Number(price) - p) / p * 100;
+  }
+
+  function fmtSigned(n, digits) {
+    const v = Number(n);
+    if (Number.isNaN(v)) return '-';
+    const s = v.toFixed(digits);
+    return v > 0 ? '+' + s : s;
+  }
+
+  function chgColor(pct) {
+    if (pct == null || Number.isNaN(pct)) return '#9aa';
+    return pct >= 0 ? '#e74c3c' : '#1abc9c';
+  }
+
+  function priceAxisRange(pre, values) {
+    const nums = values.map(Number).filter(v => !Number.isNaN(v));
+    const p = Number(pre);
+    if (p) nums.push(p);
+    if (nums.length === 0) return { min: undefined, max: undefined };
+    let lo = Math.min(...nums);
+    let hi = Math.max(...nums);
+    const pad = Math.max((hi - lo) * 0.08, (p || hi || 1) * 0.004);
+    return { min: lo - pad, max: hi + pad };
+  }
+
+  function renderIntraday(opt) {
+    const { tradeDate, times, closes, ohlc, pre, open, high, low, close, loading, error } = opt;
+    if (loading) {
+      titleEl.textContent = `加载 ${tradeDate || ''} 分时K…`;
+      metaEl.textContent = '';
+      return;
+    }
+    if (error) {
+      titleEl.textContent = `分时 / 分K · ${tradeDate || ''}`;
+      metaEl.textContent = error;
+      metaEl.style.color = '#e74c3c';
+      return;
+    }
+
+    const dayPct = pctVsPre(close, pre);
+    const dayChg = Number(close) - Number(pre);
+    titleEl.textContent = `分时 / 分K · ${tradeDate}`;
+    metaEl.style.color = '';
+    metaEl.innerHTML =
+      `开 ${Number(open).toFixed(2)}  高 ${Number(high).toFixed(2)}  低 ${Number(low).toFixed(2)}  收 ${Number(close).toFixed(2)}  昨收 ${Number(pre).toFixed(2)}` +
+      `　<span style="color:${chgColor(dayPct)};font-weight:600">涨跌 ${fmtSigned(dayChg, 2)}　${fmtSigned(dayPct, 2)}%</span>`;
+
+    const useCandle = ohlc && ohlc.length > 0 && ohlc.some(x => x[0] !== x[1] || x[2] !== x[3]);
+    const rangeVals = [
+      ...(closes || []),
+      Number(open), Number(high), Number(low), Number(close)
+    ];
+    if (ohlc) ohlc.forEach(c => { rangeVals.push(c[0], c[1], c[2], c[3]); });
+    const { min: yMin, max: yMax } = priceAxisRange(pre, rangeVals);
+
+    minuteChart.setOption({
+      backgroundColor: 'transparent',
+      animation: false,
+      legend: useCandle ? { data: ['分K', '收盘价'], textStyle: { color: '#aaa' } } : undefined,
+      grid: { left: 52, right: 56, top: 36, bottom: 30 },
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params) => {
+          const list = Array.isArray(params) ? params : [params];
+          const first = list[0];
+          if (!first) return '';
+          const idx = first.dataIndex;
+          const t = times[idx] || first.axisValue || '';
+          let price = closes && closes[idx] != null ? Number(closes[idx]) : null;
+          if ((price == null || Number.isNaN(price)) && ohlc && ohlc[idx]) price = Number(ohlc[idx][1]);
+          const pct = pctVsPre(price, pre);
+          const chg = price != null && Number(pre) ? price - Number(pre) : null;
+          let html = `<div>${t}</div>`;
+          if (useCandle && ohlc && ohlc[idx]) {
+            const [o, c, l, h] = ohlc[idx];
+            html += `<div>开 ${Number(o).toFixed(2)}　高 ${Number(h).toFixed(2)}　低 ${Number(l).toFixed(2)}　收 ${Number(c).toFixed(2)}</div>`;
+          } else if (price != null) {
+            html += `<div>价 ${price.toFixed(2)}</div>`;
+          }
+          if (pct != null) {
+            html += `<div style="color:${chgColor(pct)}">涨跌 ${fmtSigned(chg, 2)}　${fmtSigned(pct, 2)}%</div>`;
+          }
+          return html;
+        }
+      },
+      xAxis: { type: 'category', data: times, axisLabel: { color: '#9aa' }, axisLine: { lineStyle: { color: '#444' } } },
+      yAxis: [
+        {
+          scale: true,
+          min: yMin,
+          max: yMax,
+          axisLabel: { color: '#9aa', formatter: (v) => Number(v).toFixed(2) },
+          splitLine: { lineStyle: { color: '#2a2a2a' } }
+        },
+        {
+          scale: true,
+          min: yMin,
+          max: yMax,
+          position: 'right',
+          axisLabel: {
+            color: '#9aa',
+            formatter: (v) => {
+              const pct = pctVsPre(v, pre);
+              return pct == null ? '' : fmtSigned(pct, 2) + '%';
+            }
+          },
+          splitLine: { show: false }
+        }
+      ],
+      series: useCandle ? [
+        {
+          name: '分K',
+          type: 'candlestick',
+          data: ohlc,
+          yAxisIndex: 0,
+          itemStyle: { color: '#e74c3c', color0: '#1abc9c', borderColor: '#e74c3c', borderColor0: '#1abc9c' },
+          markLine: { silent: true, symbol: 'none', data: [{ yAxis: pre, lineStyle: { type: 'dashed', color: '#666' } }] }
+        },
+        {
+          name: '收盘价',
+          type: 'line',
+          data: closes,
+          yAxisIndex: 0,
+          showSymbol: false,
+          lineStyle: { width: 1, color: '#f5d76e' }
+        }
+      ] : [{
+        type: 'line',
+        data: closes,
+        yAxisIndex: 0,
+        showSymbol: false,
+        lineStyle: { width: 1.5, color: '#f5d76e' },
+        markLine: { silent: true, symbol: 'none', data: [{ yAxis: pre, lineStyle: { type: 'dashed', color: '#666' } }] },
+        areaStyle: { color: 'rgba(245,215,110,0.08)' }
+      }]
+    }, true);
+  }
+
+  // 初始：当日分时
+  const today = dailyDates.length ? dailyDates[dailyDates.length - 1] : '';
+  renderIntraday({
+    tradeDate: today || '当日',
+    times: minuteTimes,
+    closes: minuteClose,
+    ohlc: minuteOhlc,
+    pre: preClose,
+    open: @(b.Open.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+    high: @(b.High.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+    low: @(b.Low.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+    close: @(b.Last.ToString(System.Globalization.CultureInfo.InvariantCulture))
+  });
+
+  dailyChart.setOption({
+    backgroundColor: 'transparent',
+    animation: false,
+    legend: { data: ['K线', '成交量'], textStyle: { color: '#aaa' } },
+    grid: [{ left: 50, right: 20, top: 40, height: '55%' }, { left: 50, right: 20, top: '75%', height: '16%' }],
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params) => {
+        const list = Array.isArray(params) ? params : [params];
+        const candle = list.find(p => p.seriesType === 'candlestick') || list[0];
+        if (!candle) return '';
+        const idx = candle.dataIndex;
+        const date = dailyDates[idx] || candle.axisValue || '';
+        const ohlc = dailyOhlc[idx];
+        if (!ohlc) return date;
+        const [o, c, l, h] = ohlc;
+        const prevClose = idx > 0 ? Number(dailyOhlc[idx - 1][1]) : null;
+        const pct = prevClose ? pctVsPre(c, prevClose) : null;
+        const chg = prevClose != null ? Number(c) - prevClose : null;
+        let html = `<div>${date}</div>`;
+        html += `<div>开 ${Number(o).toFixed(2)}　高 ${Number(h).toFixed(2)}　低 ${Number(l).toFixed(2)}　收 ${Number(c).toFixed(2)}</div>`;
+        if (pct != null) {
+          html += `<div style="color:${chgColor(pct)}">涨跌 ${fmtSigned(chg, 2)}　${fmtSigned(pct, 2)}%</div>`;
+        }
+        const vol = dailyVol[idx];
+        if (vol != null) html += `<div>量 ${Number(vol).toLocaleString()}</div>`;
+        return html;
+      }
+    },
+    xAxis: [
+      { type: 'category', data: dailyDates, boundaryGap: true, axisLabel: { color: '#9aa' }, axisLine: { lineStyle: { color: '#444' } } },
+      { type: 'category', gridIndex: 1, data: dailyDates, axisLabel: { show: false }, axisLine: { lineStyle: { color: '#444' } } }
+    ],
+    yAxis: [
+      { scale: true, axisLabel: { color: '#9aa' }, splitLine: { lineStyle: { color: '#2a2a2a' } } },
+      { scale: true, gridIndex: 1, axisLabel: { show: false }, splitLine: { show: false } }
+    ],
+    dataZoom: [{ type: 'inside', xAxisIndex: [0, 1], start: 60, end: 100 }, { type: 'slider', xAxisIndex: [0, 1], start: 60, end: 100, height: 18, bottom: 4 }],
+    series: [
+      { name: 'K线', type: 'candlestick', data: dailyOhlc, itemStyle: { color: '#e74c3c', color0: '#1abc9c', borderColor: '#e74c3c', borderColor0: '#1abc9c' } },
+      { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: dailyVol, itemStyle: { color: '#4a90e2' } }
+    ]
+  });
+
+  async function loadDay(date) {
+    if (!date) return;
+    renderIntraday({ tradeDate: date, loading: true });
+    try {
+      const url = `${intradayUrl}?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(date)}`;
+      const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        renderIntraday({ tradeDate: date, error: err.message || ('加载失败 HTTP ' + resp.status) });
+        return;
+      }
+      const data = await resp.json();
+      renderIntraday({
+        tradeDate: data.tradeDate || date,
+        times: data.bars.map(x => x.time),
+        closes: data.bars.map(x => Number(x.close)),
+        ohlc: data.bars.map(x => [Number(x.open), Number(x.close), Number(x.low), Number(x.high)]),
+        pre: Number(data.preClose),
+        open: Number(data.open),
+        high: Number(data.high),
+        low: Number(data.low),
+        close: Number(data.close)
+      });
+      document.getElementById('chartMinute').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (e) {
+      renderIntraday({ tradeDate: date, error: e.message || '网络错误' });
+    }
+  }
+
+  dailyChart.on('click', (params) => {
+    const idx = params.dataIndex;
+    if (idx == null || idx < 0 || idx >= dailyDates.length) return;
+    loadDay(dailyDates[idx]);
+  });
+
+  document.querySelectorAll('.daily-row').forEach(row => {
+    row.addEventListener('click', () => loadDay(row.getAttribute('data-date')));
+  });
+
+  window.addEventListener('resize', () => { minuteChart.resize(); dailyChart.resize(); });
+})();
+</script>
+}

@@ -1,0 +1,48 @@
+@model IReadOnlyList<StockSim.Application.Dtos.InvestmentGoalDto>
+@{
+    ViewData["Title"] = "投资目标与达成率";
+}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0">投资目标与达成率</h2>
+    <a class="btn btn-primary btn-sm" asp-action="Index">新建目标选股</a>
+</div>
+<p class="text-muted small">达成率 = 组合收益% ÷ 预期收益% × 100（入选股按每股默认资金等权）。</p>
+
+<div class="table-responsive">
+<table class="table table-hover align-middle">
+    <thead class="table-light">
+    <tr>
+        <th>创建时间</th>
+        <th>预期收益</th>
+        <th>周期</th>
+        <th>题材</th>
+        <th>状态</th>
+        <th>入选</th>
+        <th>组合收益</th>
+        <th>达成率</th>
+        <th></th>
+    </tr>
+    </thead>
+    <tbody>
+    @if (Model.Count == 0)
+    {
+        <tr><td colspan="9" class="text-center text-muted py-4">暂无目标，请先在 AI 工作台创建</td></tr>
+    }
+    @foreach (var g in Model)
+    {
+        var rateUp = (g.LatestAchievementRate ?? 0) >= 100;
+        <tr>
+            <td>@g.CreationTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+            <td>@g.ExpectedReturnPct%</td>
+            <td>@g.HorizonDays 天</td>
+            <td>@g.ThemePreference</td>
+            <td><span class="badge bg-secondary">@g.Status</span></td>
+            <td>@g.StockCount</td>
+            <td>@(g.LatestPortfolioReturnPct?.ToString("N2") ?? "-")%</td>
+            <td class="@(rateUp ? "text-danger" : "")">@(g.LatestAchievementRate?.ToString("N1") ?? "-")%</td>
+            <td><a asp-action="GoalDetails" asp-route-id="@g.Id">详情</a></td>
+        </tr>
+    }
+    </tbody>
+</table>
+</div>

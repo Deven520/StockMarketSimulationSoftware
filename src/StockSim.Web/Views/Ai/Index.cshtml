@@ -1,0 +1,115 @@
+@model IReadOnlyList<StockSim.Application.Dtos.AiJobDto>
+@using StockSim.Domain.Enums
+@using StockSim.Application.Services
+@using StockSim.Application.Dtos
+@{
+    var cursorStatus = ViewBag.CursorStatus as CursorAiConnectionStatus;
+    var goals = (IReadOnlyList<InvestmentGoalDto>)(ViewBag.Goals ?? Array.Empty<InvestmentGoalDto>());
+}
+<h2>AI 工作台</h2>
+<p class="text-muted">输入<strong>预期收益、周期、题材偏好</strong> → 任务进入 <a asp-action="Queue">AI 队列</a> 异步执行 → 完成后勾选入库；每日跟踪目标达成率。</p>
+@{
+    var qc = ViewBag.QueueCounts as (int Pending, int Running, int Succeeded, int Failed)?;
+}
+@if (qc is not null)
+{
+    <div class="mb-3 small">
+        队列：排队 @qc.Value.Pending · 执行中 @qc.Value.Running ·
+        <a asp-action="Queue">查看 AI 队列</a>
+    </div>
+}
+@if (cursorStatus is not null)
+{
+    <div class="alert @(cursorStatus.Ok ? "alert-success" : "alert-warning") py-2">
+        <strong>Cursor Agent：</strong>
+        @(cursorStatus.Ok ? "已接通" : "未接通")
+        <span class="text-muted">(@cursorStatus.Status)</span>
+        @if (!string.IsNullOrWhiteSpace(cursorStatus.Email))
+        {
+            <span>· @cursorStatus.Email</span>
+        }
+        <div class="small mt-1">@cursorStatus.Hint</div>
+    </div>
+}
+
+<div class="card mb-4">
+    <div class="card-body">
+        <h5 class="card-title">按目标 AI 选股</h5>
+        <form asp-action="CreateGoal" method="post" class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label">预期收益 (%)</label>
+                <input name="expectedReturnPct" type="number" step="0.1" min="0.1" class="form-control" value="3" required />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">预期周期（天）</label>
+                <input name="horizonDays" type="number" min="1" class="form-control" value="10" required />
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">题材偏好</label>
+                <input name="themePreference" class="form-control" placeholder="例如：新能源、低估值银行、高股息" required />
+            </div>
+            <div class="col-12">
+                <button class="btn btn-primary">提交选股任务（异步）</button>
+                <a class="btn btn-outline-secondary" asp-action="Queue">AI 队列</a>
+                <a class="btn btn-outline-secondary" asp-action="Goals">查看目标达成率</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+@if (goals.Count > 0)
+{
+    <h4>最近目标</h4>
+    <div class="table-responsive mb-4">
+        <table class="table table-sm table-hover">
+            <thead>
+            <tr>
+                <th>创建</th>
+                <th>目标</th>
+                <th>状态</th>
+                <th>最新达成率</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            @foreach (var g in goals.Take(5))
+            {
+                <tr>
+                    <td>@g.CreationTime.ToLocalTime().ToString("MM-dd HH:mm")</td>
+                    <td>@g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.ThemePreference</td>
+                    <td>@g.Status</td>
+                    <td>@(g.LatestAchievementRate.HasValue ? $"{g.LatestAchievementRate:N1}%" : "-")</td>
+                    <td><a asp-action="GoalDetails" asp-route-id="@g.Id">详情</a></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </div>
+}
+
+<h4>选股任务历史</h4>
+<table class="table table-hover align-middle">
+    <thead>
+        <tr>
+            <th>时间</th>
+            <th>类型</th>
+            <th>状态</th>
+            <th>提示词</th>
+            <th>候选</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+    @foreach (var j in Model.Where(x => x.JobType == AiJobType.StockPick))
+    {
+        <tr>
+            <td class="text-nowrap">@j.CreationTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+            <td>目标选股</td>
+            <td><span class="badge bg-secondary">@j.Status</span></td>
+            <td style="max-width:320px;"><div class="text-truncate" title="@j.Prompt">@j.Prompt</div></td>
+            <td>@j.SuggestionCount</td>
+            <td><a class="btn btn-sm btn-outline-primary" asp-action="Details" asp-route-id="@j.Id">查阅</a></td>
+        </tr>
+    }
+    </tbody>
+</table>

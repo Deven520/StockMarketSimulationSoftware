@@ -1,0 +1,35 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.db
+*.db-shm
+*.db-wal
+identity.db
+stocksim.db
+app.db
+
+## Secrets / local
+**/appsettings.*.local.json
+**/appsettings.Cursor.local.json
+**/secrets.json
+secrets/
+data/ai/.cursor-api-key
+data/ai/*_response_*.json
+data/ai/*_request_*.json
+!data/ai/.gitkeep
+
+## Cursor Agent bridge
+adapters/cursor-agent-bridge/node_modules/
+tools/node/
+tools/node-*.zip
+tools/_node_extract/
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store

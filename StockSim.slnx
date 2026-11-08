@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/adapters/">
+    <Project Path="adapters/StockSim.AI.Cursor/StockSim.AI.Cursor.csproj" />
+    <Project Path="adapters/StockSim.MarketData.Replay/StockSim.MarketData.Replay.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/StockSim.Application/StockSim.Application.csproj" />
+    <Project Path="src/StockSim.Domain/StockSim.Domain.csproj" />
+    <Project Path="src/StockSim.Infrastructure/StockSim.Infrastructure.csproj" />
+    <Project Path="src/StockSim.Web/StockSim.Web.csproj" />
+    <Project Path="src/StockSim.Worker/StockSim.Worker.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/StockSim.Tests.Domain/StockSim.Tests.Domain.csproj" />
+  </Folder>
+</Solution>

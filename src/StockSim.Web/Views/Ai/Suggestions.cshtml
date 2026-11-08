@@ -1,0 +1,40 @@
+@model IReadOnlyList<StockSim.Domain.Entities.AiSuggestion>
+@{
+    Guid jobId = ViewBag.JobId;
+    var pools = (IReadOnlyList<StockSim.Application.Dtos.StockPoolDto>)ViewBag.Pools;
+    var strategies = (IReadOnlyList<StockSim.Application.Dtos.StrategyDto>)ViewBag.Strategies;
+}
+<h2>建议审阅</h2>
+@foreach (var s in Model)
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <pre class="small bg-light p-2">@s.PayloadJson</pre>
+            <form asp-action="Review" method="post" class="row g-2 align-items-end">
+                <input type="hidden" name="jobId" value="@jobId" />
+                <input type="hidden" name="suggestionId" value="@s.Id" />
+                <div class="col-md-3">
+                    <label class="form-label">目标股票池</label>
+                    <select name="poolId" class="form-select">
+                        <option value="">-</option>
+                        @foreach (var p in pools) { <option value="@p.Id">@p.Name</option> }
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">目标策略</label>
+                    <select name="strategyId" class="form-select">
+                        <option value="">-</option>
+                        @foreach (var st in strategies) { <option value="@st.Id">@st.Name</option> }
+                    </select>
+                </div>
+                <div class="col-auto"><button name="accept" value="true" class="btn btn-success">确认应用</button></div>
+                <div class="col-auto"><button name="accept" value="false" class="btn btn-outline-danger">拒绝</button></div>
+            </form>
+            @if (s.ReviewedAt != null)
+            {
+                <div class="mt-2 text-muted">已审阅：@(s.IsAccepted ? "接受" : "拒绝") @s.ReviewedAt</div>
+            }
+        </div>
+    </div>
+}
+<a asp-action="Index">返回</a>
