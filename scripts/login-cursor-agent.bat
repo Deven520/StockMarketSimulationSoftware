@@ -1,19 +1,21 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0.."
+
 echo ========================================
-echo   StockSim - 登录 Cursor Agent（浏览器）
+echo   StockSim - Cursor Agent Login
 echo ========================================
 echo.
-echo 将打开浏览器，请用你当前的 Cursor 账号完成授权。
-echo 不会保存账号密码；密钥仅写入本机 ~/.cursor/sdk/
+echo Opens browser. Sign in with your Cursor account.
+echo Credential is stored under %%USERPROFILE%%\.cursor\sdk\
+echo Password is NOT saved into this repository.
 echo.
 
 if not exist "tools\node\node.exe" (
-  echo [!] 未找到便携 Node，先执行安装...
+  echo [!] Portable Node missing. Running setup first...
   powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-cursor-agent.ps1"
   if errorlevel 1 (
-    echo 安装失败
+    echo Setup failed.
     pause
     exit /b 1
   )
@@ -22,12 +24,14 @@ if not exist "tools\node\node.exe" (
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-cursor-agent.ps1" -Login -SkipDownloadNode
 if errorlevel 1 (
   echo.
-  echo 登录失败。也可到 https://cursor.com/dashboard/integrations 创建 API Key，
-  echo 设置用户环境变量 CURSOR_API_KEY 后重启 Web。
+  echo Login failed.
+  echo Create an API Key at https://cursor.com/dashboard/integrations
+  echo then set user env CURSOR_API_KEY and restart Web.
   pause
   exit /b 1
 )
 
 echo.
-echo 登录成功。请重启 StockSim.Web 后再试 AI 选股。
+echo Login succeeded. Restart StockSim.Web and retry AI stock-pick.
 pause
+endlocal

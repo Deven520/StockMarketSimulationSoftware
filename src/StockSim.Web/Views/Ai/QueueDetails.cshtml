@@ -1,6 +1,6 @@
 @model StockSim.Application.Dtos.AiQueueItemDetailDto
 @using StockSim.Domain.Enums
-@using System.Text.Json
+@using StockSim.Web.Helpers
 @{
     string TypeName(AiQueueTaskType t) => t switch
     {
@@ -8,6 +8,14 @@
         AiQueueTaskType.StockPick => "选股",
         AiQueueTaskType.StrategyRefresh => "策略刷新",
         _ => t.ToString()
+    };
+    string StatusName(AiQueueItemStatus s) => s switch
+    {
+        AiQueueItemStatus.Pending => "排队中",
+        AiQueueItemStatus.Running => "执行中",
+        AiQueueItemStatus.Succeeded => "成功",
+        AiQueueItemStatus.Failed => "失败",
+        _ => s.ToString()
     };
     var badge = Model.Status switch
     {
@@ -17,27 +25,12 @@
         AiQueueItemStatus.Failed => "danger",
         _ => "dark"
     };
-    string Pretty(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return "（空）";
-        var t = raw.Trim();
-        if ((t.StartsWith('{') && t.EndsWith('}')) || (t.StartsWith('[') && t.EndsWith(']')))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(t);
-                return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
-            }
-            catch { /* keep raw */ }
-        }
-        return raw;
-    }
     var jobLinkText = Model.TaskType == AiQueueTaskType.StrategyRefresh ? "策略 Job" : "选股 Job";
 }
 <div class="mb-3 d-flex justify-content-between align-items-start flex-wrap gap-2">
     <div>
         <h2 class="mb-1">@Model.Title</h2>
-        <span class="badge bg-@badge">@Model.Status</span>
+        <span class="badge bg-@badge">@StatusName(Model.Status)</span>
         <span class="text-muted small ms-2">@TypeName(Model.TaskType)</span>
     </div>
     <div class="d-flex gap-2">
@@ -56,10 +49,10 @@
 <table class="table table-sm mb-3">
     <tr><th style="width:8rem">标的</th><td>@(Model.Symbol ?? "—")</td></tr>
     <tr><th>关联</th><td class="small text-muted">
-        Goal @(Model.RelatedGoalId?.ToString() ?? "—") ·
+        目标 @(Model.RelatedGoalId?.ToString() ?? "—") ·
         Job @(Model.RelatedAiJobId?.ToString() ?? "—") ·
-        PoolItem @(Model.RelatedPoolItemId?.ToString() ?? "—") ·
-        Corr @(Model.CorrelationId?.ToString() ?? "—")
+        池成分 @(Model.RelatedPoolItemId?.ToString() ?? "—") ·
+        关联号 @(Model.CorrelationId?.ToString() ?? "—")
     </td></tr>
     <tr><th>入队</th><td>@Model.CreationTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td></tr>
     <tr><th>开始</th><td>@(Model.StartedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "—")</td></tr>
@@ -73,15 +66,21 @@
 }
 
 <div class="card mb-3">
-    <div class="card-header">输入（Input）</div>
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>输入</span>
+        <span class="text-muted small fw-normal">字段名已尽量中文化，仅用于展示</span>
+    </div>
     <div class="card-body">
-        <pre class="mb-0 small" style="white-space:pre-wrap;max-height:420px;overflow:auto;">@Pretty(Model.InputPayload)</pre>
+        <pre class="mb-0 small" style="white-space:pre-wrap;max-height:420px;overflow:auto;">@AiPayloadChineseDisplay.Format(Model.InputPayload)</pre>
     </div>
 </div>
 
 <div class="card mb-3">
-    <div class="card-header">返回结果（Output）</div>
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>返回结果</span>
+        <span class="text-muted small fw-normal">字段名已尽量中文化，仅用于展示</span>
+    </div>
     <div class="card-body">
-        <pre class="mb-0 small" style="white-space:pre-wrap;max-height:480px;overflow:auto;">@(string.IsNullOrWhiteSpace(Model.OutputPayload) ? "（尚未产出或为空）" : Pretty(Model.OutputPayload))</pre>
+        <pre class="mb-0 small" style="white-space:pre-wrap;max-height:480px;overflow:auto;">@(string.IsNullOrWhiteSpace(Model.OutputPayload) ? "（尚未产出或为空）" : AiPayloadChineseDisplay.Format(Model.OutputPayload))</pre>
     </div>
 </div>

@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-  安装 StockSim ↔ Cursor Agent SDK 桥接（便携 Node + npm 依赖），可选浏览器登录当前 Cursor 账号。
+  Install StockSim <-> Cursor Agent SDK bridge (portable Node + npm deps), optional browser login.
 
 .DESCRIPTION
-  Cursor SDK 不使用账号密码，认证方式：
-  1) -Login：浏览器登录当前 Cursor 账号，写入本机 SDK 凭证
-  2) 环境变量 CURSOR_API_KEY（Dashboard → Integrations）
-  3) appsettings 中 AI:Cursor:ApiKey（勿提交 Git）
+  Cursor SDK does not use account/password. Auth options:
+  1) -Login : browser login, stores SDK credential on this machine
+  2) env CURSOR_API_KEY (Dashboard -> Integrations)
+  3) appsettings AI:Cursor:ApiKey (do not commit)
 
 .EXAMPLE
   .\scripts\setup-cursor-agent.ps1
@@ -26,8 +26,12 @@ $toolsNode = Join-Path $repoRoot "tools\node"
 $nodeVersion = "v22.23.4"
 $zipName = "node-$nodeVersion-win-x64.zip"
 $zipUrl = "https://nodejs.org/download/release/$nodeVersion/$zipName"
+$utf8Bom = New-Object System.Text.UTF8Encoding $true
 
-function Write-Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
+function Write-Step([string]$msg) {
+    Write-Host ""
+    Write-Host ("=== {0} ===" -f $msg) -ForegroundColor Cyan
+}
 
 function Find-SystemNode {
     $cmd = Get-Command node -ErrorAction SilentlyContinue
@@ -39,17 +43,17 @@ function Ensure-PortableNode {
     $nodeExe = Join-Path $toolsNode "node.exe"
     $npmCmd = Join-Path $toolsNode "npm.cmd"
     if ((Test-Path $nodeExe) -and (Test-Path $npmCmd)) {
-        Write-Host "已有便携 Node: $nodeExe" -ForegroundColor Green
+        Write-Host ("Portable Node ready: {0}" -f $nodeExe) -ForegroundColor Green
         return @{ Node = $nodeExe; Npm = $npmCmd }
     }
 
     if ($SkipDownloadNode) {
-        throw "tools\node 不存在且指定了 -SkipDownloadNode"
+        throw "tools\node missing and -SkipDownloadNode was specified"
     }
 
-    Write-Step "下载便携 Node.js $nodeVersion"
+    Write-Step ("Download portable Node.js {0}" -f $nodeVersion)
     New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "tools") | Out-Null
-    $zipPath = Join-Path $repoRoot "tools\$zipName"
+    $zipPath = Join-Path $repoRoot ("tools\" + $zipName)
     Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
 
     $extractTo = Join-Path $repoRoot "tools\_node_extract"
@@ -57,26 +61,27 @@ function Ensure-PortableNode {
     Expand-Archive -Path $zipPath -DestinationPath $extractTo -Force
 
     $extracted = Get-ChildItem $extractTo -Directory | Select-Object -First 1
-    if (-not $extracted) { throw "解压 Node 失败" }
+    if (-not $extracted) { throw "Failed to extract Node zip" }
 
     if (Test-Path $toolsNode) { Remove-Item $toolsNode -Recurse -Force }
     Move-Item $extracted.FullName $toolsNode
     Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
     Remove-Item $extractTo -Recurse -Force -ErrorAction SilentlyContinue
 
-    if (-not (Test-Path $nodeExe)) { throw "便携 Node 安装失败" }
-    Write-Host "Node 已安装到 $toolsNode" -ForegroundColor Green
+    if (-not (Test-Path $nodeExe)) { throw "Portable Node install failed" }
+    Write-Host ("Node installed at {0}" -f $toolsNode) -ForegroundColor Green
     return @{ Node = $nodeExe; Npm = $npmCmd }
 }
 
-Write-Step "准备 Node.js"
+Write-Step "Prepare Node.js"
+Write-Host ("Repo root: {0}" -f $repoRoot) -ForegroundColor DarkGray
 $sysNode = Find-SystemNode
 $nodeExe = $null
 $npmCmd = $null
 
 if ($sysNode) {
     $ver = & $sysNode -v
-    Write-Host "系统 Node: $sysNode ($ver)"
+    Write-Host ("System Node: {0} ({1})" -f $sysNode, $ver)
     $major = 0
     if ($ver -match 'v?(\d+)') { $major = [int]$Matches[1] }
     if ($major -ge 22) {
@@ -85,7 +90,7 @@ if ($sysNode) {
         if ($npm) { $npmCmd = $npm.Source }
     }
     else {
-        Write-Host "系统 Node 版本过低（需要 >= 22.13），改用便携 Node。" -ForegroundColor Yellow
+        Write-Host "System Node too old (need >= 22). Using portable Node." -ForegroundColor Yellow
     }
 }
 
@@ -95,51 +100,65 @@ if (-not $nodeExe -or -not $npmCmd) {
     $npmCmd = $portable.Npm
 }
 
+if (-not (Test-Path $bridgeDir)) {
+    throw ("Bridge directory not found: {0}" -f $bridgeDir)
+}
+
 Write-Step "npm install @cursor/sdk"
 Push-Location $bridgeDir
 try {
+    # npm writes notices to stderr; do not treat that as terminating under -ErrorAction Stop
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     & $npmCmd install --no-fund --no-audit
-    if ($LASTEXITCODE -ne 0) { throw "npm install 失败" }
+    $npmExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($npmExit -ne 0) { throw "npm install failed" }
 }
 finally {
     Pop-Location
 }
 
-Write-Host "`n桥接就绪: $bridgeDir" -ForegroundColor Green
-Write-Host "Node: $nodeExe"
+Write-Host ""
+Write-Host ("Bridge ready: {0}" -f $bridgeDir) -ForegroundColor Green
+Write-Host ("Node: {0}" -f $nodeExe)
 
-# 写入本地覆盖配置提示（不写密钥）
+# Write local example config (no secrets). Prefer relative BridgeDirectory so move-folder is safe.
 $example = Join-Path $repoRoot "src\StockSim.Web\appsettings.Cursor.local.json.example"
-@"
-{
-  "AI": {
-    "Cursor": {
-      "Enabled": true,
-      "Model": "composer-2.5",
-      "TimeoutSeconds": 180,
-      "FallbackToPlaceholder": true,
-      "NodeExecutable": "$($nodeExe.Replace('\','\\'))",
-      "BridgeDirectory": "adapters/cursor-agent-bridge",
-      "ApiKey": ""
+$exampleObj = [ordered]@{
+    AI = [ordered]@{
+        Cursor = [ordered]@{
+            Enabled               = $true
+            Model                 = "composer-2.5"
+            TimeoutSeconds        = 180
+            FallbackToPlaceholder = $false
+            NodeExecutable        = $nodeExe
+            BridgeDirectory       = "adapters/cursor-agent-bridge"
+            ApiKey                = ""
+        }
     }
-  }
 }
-"@ | Set-Content -Path $example -Encoding UTF8
+$exampleJson = $exampleObj | ConvertTo-Json -Depth 6
+[System.IO.File]::WriteAllText($example, $exampleJson + [Environment]::NewLine, $utf8Bom)
 
 if ($Login) {
-    Write-Step "浏览器登录 Cursor 账号（不会在本仓库保存密码）"
-    Write-Host "将打开浏览器；请用你当前的 Cursor 账号完成授权。" -ForegroundColor Yellow
-    & $nodeExe (Join-Path $bridgeDir "login.mjs")
-    if ($LASTEXITCODE -ne 0) { throw "登录失败" }
+    Write-Step "Browser login to Cursor account"
+    Write-Host "A browser window will open. Sign in with your current Cursor account." -ForegroundColor Yellow
+    Write-Host "Password is NOT stored in this repo. Credential goes to ~/.cursor/sdk/" -ForegroundColor DarkGray
+    $loginJs = Join-Path $bridgeDir "login.mjs"
+    if (-not (Test-Path $loginJs)) {
+        throw ("login.mjs not found: {0}" -f $loginJs)
+    }
+    & $nodeExe $loginJs
+    if ($LASTEXITCODE -ne 0) { throw "Login failed" }
+    Write-Host "Login OK." -ForegroundColor Green
 }
 
-Write-Host @"
-
-下一步：
-  1. （推荐）再跑一次带登录：  .\scripts\setup-cursor-agent.ps1 -Login
-     或设置用户环境变量 CURSOR_API_KEY（https://cursor.com/dashboard/integrations）
-  2. 确认 Web appsettings 中 AI:Cursor:Enabled = true
-  3. 重启 StockSim.Web，在「AI 工作台」提交选股提示词
-
-注意：Cursor 不提供用账号密码调 Agent 的方式；请用 API Key 或浏览器登录。
-"@ -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Next steps:" -ForegroundColor Cyan
+Write-Host "  1. Prefer: .\scripts\setup-cursor-agent.ps1 -Login"
+Write-Host "     or set user env CURSOR_API_KEY (https://cursor.com/dashboard/integrations)"
+Write-Host "  2. Ensure AI:Cursor:Enabled = true in Web appsettings"
+Write-Host "  3. Restart StockSim.Web, then try AI stock-pick"
+Write-Host ""
+Write-Host "Note: Cursor Agent has no username/password API; use API Key or browser login." -ForegroundColor DarkGray

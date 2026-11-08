@@ -12,6 +12,12 @@ var builder = Host.CreateApplicationBuilder(args);
 var repoRoot = FindRepoRoot(AppContext.BaseDirectory);
 builder.Configuration["MarketData:ReplayDirectory"] ??= Path.Combine(repoRoot, "data", "replay");
 builder.Configuration["AI:WorkDirectory"] ??= Path.Combine(repoRoot, "data", "ai");
+var portableNode = Path.Combine(repoRoot, "tools", "node", "node.exe");
+if (File.Exists(portableNode))
+    builder.Configuration["AI:Cursor:NodeExecutable"] = portableNode;
+var bridgeDir = Path.Combine(repoRoot, "adapters", "cursor-agent-bridge");
+if (Directory.Exists(bridgeDir))
+    builder.Configuration["AI:Cursor:BridgeDirectory"] = bridgeDir;
 
 // 默认与 Web 开发库对齐：优先使用仓库根目录下的 stocksim.db
 if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("StockSim"))
@@ -61,6 +67,7 @@ static string FindRepoRoot(string start)
     while (dir is not null)
     {
         if (File.Exists(Path.Combine(dir.FullName, "StockSim.slnx"))
+            || Directory.Exists(Path.Combine(dir.FullName, "adapters", "cursor-agent-bridge"))
             || Directory.Exists(Path.Combine(dir.FullName, "docs")))
         {
             return dir.FullName;
