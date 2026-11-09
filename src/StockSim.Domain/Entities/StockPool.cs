@@ -21,6 +21,9 @@ public class StockPoolItem : AuditedEntity
     public string? Remark { get; set; }
     public PoolItemSource Source { get; set; } = PoolItemSource.Manual;
 
+    /// <summary>交易风格：做T股走日内状态机；趋势股仅观察/跟踪，不做自动做T。</summary>
+    public StockTradeStyle TradeStyle { get; set; } = StockTradeStyle.IntradayT;
+
     /// <summary>一股一策：本成分绑定的专属策略。</summary>
     public Guid? BoundStrategyId { get; set; }
     public StrategyDefinition? BoundStrategy { get; set; }

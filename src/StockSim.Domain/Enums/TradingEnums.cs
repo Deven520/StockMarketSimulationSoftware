@@ -20,6 +20,15 @@ public enum PoolItemSource
     Ai = 2
 }
 
+/// <summary>股票交易/选股风格：做T vs 趋势波段。</summary>
+public enum StockTradeStyle
+{
+    /// <summary>做T股：日内高抛低吸（默认，兼容旧数据）。</summary>
+    IntradayT = 1,
+    /// <summary>趋势股：底部反转/中期趋势观察，不做自动做T。</summary>
+    TrendSwing = 2
+}
+
 public enum AiJobType
 {
     StockPick = 1,

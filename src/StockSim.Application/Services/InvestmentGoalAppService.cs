@@ -120,11 +120,17 @@ public class InvestmentGoalAppService
         if (request.HorizonDays < 1) throw new ArgumentException("预期周期至少 1 天");
         if (string.IsNullOrWhiteSpace(request.ThemePreference)) throw new ArgumentException("请填写题材偏好");
 
+        var tradeStyle = request.TradeStyle == StockTradeStyle.TrendSwing
+            ? StockTradeStyle.TrendSwing
+            : StockTradeStyle.IntradayT;
+        var styleLabel = tradeStyle == StockTradeStyle.TrendSwing ? "趋势股" : "做T股";
+
         var goal = new InvestmentGoal
         {
             ExpectedReturnPct = request.ExpectedReturnPct,
             HorizonDays = request.HorizonDays,
             ThemePreference = request.ThemePreference.Trim(),
+            TradeStyle = tradeStyle,
             Status = InvestmentGoalStatus.Draft
         };
         _db.InvestmentGoals.Add(goal);
@@ -136,6 +142,8 @@ public class InvestmentGoalAppService
             expectedReturnPct = goal.ExpectedReturnPct,
             horizonDays = goal.HorizonDays,
             themePreference = goal.ThemePreference,
+            tradeStyle = tradeStyle.ToString(),
+            tradeStyleLabel = styleLabel,
             asOf = DateTime.Now
         });
 
@@ -143,13 +151,14 @@ public class InvestmentGoalAppService
         {
             JobType = AiJobType.StockPick,
             Status = AiJobStatus.Created,
-            Prompt = $"（排队中）题材「{goal.ThemePreference}」· 预期 {goal.ExpectedReturnPct}% / {goal.HorizonDays} 天",
+            Prompt = $"（排队中）{styleLabel} · 题材「{goal.ThemePreference}」· 预期 {goal.ExpectedReturnPct}% / {goal.HorizonDays} 天",
             InputPayload = JsonSerializer.Serialize(new
             {
                 goalId = goal.Id,
                 expectedReturnPct = goal.ExpectedReturnPct,
                 horizonDays = goal.HorizonDays,
                 themePreference = goal.ThemePreference,
+                tradeStyle = tradeStyle.ToString(),
                 queued = true
             })
         };
@@ -161,7 +170,7 @@ public class InvestmentGoalAppService
         {
             TaskType = AiQueueTaskType.GoalToPrompt,
             Status = AiQueueItemStatus.Pending,
-            Title = $"目标→提示词 · {goal.ThemePreference}",
+            Title = $"目标→提示词 · {styleLabel} · {goal.ThemePreference}",
             CorrelationId = correlationId,
             RelatedGoalId = goal.Id,
             RelatedAiJobId = job.Id,
@@ -332,7 +341,9 @@ public class InvestmentGoalAppService
             var name = s.Name ?? symbol;
             if (string.IsNullOrWhiteSpace(symbol)) continue;
 
-            var (item, _) = await _pools.AddItemSmartAsync(pool.Id, symbol, name, "AI目标选股", PoolItemSource.Ai, ct);
+            var tags = goal.TradeStyle == StockTradeStyle.TrendSwing ? "AI目标选股,趋势" : "AI目标选股,做T";
+            var (item, _) = await _pools.AddItemSmartAsync(
+                pool.Id, symbol, name, tags, PoolItemSource.Ai, goal.TradeStyle, ct);
             if (item is null) continue;
 
             var exists = await _db.InvestmentGoalStocks.AnyAsync(
@@ -581,6 +592,17 @@ public class InvestmentGoalAppService
                 $"【投资目标硬约束】预期收益约 {goal.ExpectedReturnPct}%；预期周期约 {goal.HorizonDays} 个交易日；题材偏好「{theme}」。");
         }
 
+        if (goal.TradeStyle == StockTradeStyle.TrendSwing)
+        {
+            parts.Add(
+                "【选股类型】趋势股：优先底部反转/中期趋势初成标的；不做日内高频做T；适合观察跟踪。");
+        }
+        else
+        {
+            parts.Add(
+                "【选股类型】做T股：优先流动性好、波动适中、适合日内高抛低吸的标的。");
+        }
+
         if (!asksSymbols || banPhrases.Any(p => prompt.Contains(p, StringComparison.OrdinalIgnoreCase)))
         {
             parts.Add(
@@ -591,10 +613,22 @@ public class InvestmentGoalAppService
         return string.Join("\n\n", parts.Where(x => !string.IsNullOrWhiteSpace(x)));
     }
 
-    private static string BuildFallbackPrompt(InvestmentGoal goal) =>
-        $"请推荐 3~5 只适合 A 股模拟日内做T的具体股票（必须含 6 位代码与简称）。" +
-        $"题材偏好「{goal.ThemePreference}」；希望约 {goal.HorizonDays} 个交易日内组合收益接近 {goal.ExpectedReturnPct}%；" +
-        "优先流动性好、波动适中、非 ST；返回 JSON：analysis、items[{symbol,name,reason,risk}]。";
+    private static string BuildFallbackPrompt(InvestmentGoal goal)
+    {
+        if (goal.TradeStyle == StockTradeStyle.TrendSwing)
+        {
+            return
+                $"请推荐 3~5 只适合 A 股中期趋势/底部反转观察的具体股票（必须含 6 位代码与简称）。" +
+                $"题材偏好「{goal.ThemePreference}」；希望约 {goal.HorizonDays} 个交易日内组合收益接近 {goal.ExpectedReturnPct}%；" +
+                "优先基本面改善、底部结构清晰或趋势初成、非 ST；不做日内高频做T；" +
+                "返回 JSON：analysis、items[{symbol,name,reason,risk}]。";
+        }
+
+        return
+            $"请推荐 3~5 只适合 A 股模拟日内做T的具体股票（必须含 6 位代码与简称）。" +
+            $"题材偏好「{goal.ThemePreference}」；希望约 {goal.HorizonDays} 个交易日内组合收益接近 {goal.ExpectedReturnPct}%；" +
+            "优先流动性好、波动适中、非 ST；返回 JSON：analysis、items[{symbol,name,reason,risk}]。";
+    }
 
     private static string BuildForcedStockPickPrompt(InvestmentGoal goal, string previousPrompt) =>
         BuildFallbackPrompt(goal) +
@@ -614,5 +648,5 @@ public class InvestmentGoalAppService
         decimal? portfolioReturn) =>
         new(g.Id, g.ExpectedReturnPct, g.HorizonDays, g.ThemePreference, g.GeneratedPrompt, g.PromptRationale,
             g.Status, g.StartDate, g.TargetEndDate, g.StockPickJobId, stockCount, achievement, portfolioReturn,
-            g.CreationTime);
+            g.CreationTime, g.TradeStyle);
 }

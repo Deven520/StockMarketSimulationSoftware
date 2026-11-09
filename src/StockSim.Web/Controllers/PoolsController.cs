@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using StockSim.Application.Dtos;
 using StockSim.Application.Services;
 using StockSim.Application.Services.Alerts;
+using StockSim.Domain.Enums;
 using StockSim.Domain.MarketData;
 
 namespace StockSim.Web.Controllers;
@@ -111,9 +112,15 @@ public class PoolsController : Controller
 
     /// <summary>代码或名称填其一即可；默认策略入库后异步 AI 刷新。</summary>
     [HttpPost]
-    public async Task<IActionResult> AddItem(Guid poolId, string? symbol, string? name, string? tags, CancellationToken ct)
+    public async Task<IActionResult> AddItem(
+        Guid poolId,
+        string? symbol,
+        string? name,
+        string? tags,
+        StockTradeStyle tradeStyle = StockTradeStyle.IntradayT,
+        CancellationToken ct = default)
     {
-        var (item, msg) = await _pools.AddItemSmartAsync(poolId, symbol, name, tags, ct: ct);
+        var (item, msg) = await _pools.AddItemSmartAsync(poolId, symbol, name, tags, tradeStyle: tradeStyle, ct: ct);
         TempData["Msg"] = msg;
         TempData["MsgType"] = item is null ? "danger" : "success";
         return RedirectToAction(nameof(Index));

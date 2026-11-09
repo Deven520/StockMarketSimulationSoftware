@@ -39,12 +39,13 @@ public class AiController : Controller
         decimal expectedReturnPct,
         int horizonDays,
         string themePreference,
-        CancellationToken ct)
+        StockTradeStyle tradeStyle = StockTradeStyle.IntradayT,
+        CancellationToken ct = default)
     {
         try
         {
             var (goal, job, queueId) = await _goals.CreateGoalAndPickAsync(
-                new CreateInvestmentGoalRequest(expectedReturnPct, horizonDays, themePreference), ct);
+                new CreateInvestmentGoalRequest(expectedReturnPct, horizonDays, themePreference, tradeStyle), ct);
             TempData["Msg"] = $"已提交 AI 队列（任务 {queueId.ToString()[..8]}…）。完成后可在选股结果中勾选入库。";
             TempData["MsgType"] = "success";
             return RedirectToAction(nameof(Queue), new { highlight = queueId });

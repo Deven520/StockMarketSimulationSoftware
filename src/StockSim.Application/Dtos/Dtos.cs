@@ -15,7 +15,8 @@ public record StockPoolItemDto(
     DateTime? StrategyUpdatedAt = null,
     decimal InitialCash = 200_000m,
     decimal AvailableCash = 200_000m,
-    bool NotifyOnTrade = false);
+    bool NotifyOnTrade = false,
+    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT);
 public record CreateStockPoolRequest(string Name, string? Description);
 public record AddPoolItemRequest(string Symbol, string Name, string? Tags, string? Remark);
 
@@ -54,7 +55,8 @@ public record PoolStockRowDto(
     string? ForecastStatus = null,
     string? ForecastSource = null,
     decimal? AvgAiAccuracyPct = null,
-    decimal? AvgAtrAccuracyPct = null);
+    decimal? AvgAtrAccuracyPct = null,
+    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT);
 
 /// <summary>一股一策 AI 刷新结果（供队列回写 Input/Output / Job 关联）。</summary>
 public record StrategyAiRunResult(
@@ -191,6 +193,29 @@ public record DashboardDto(
     int PoolItemCount = 0,
     decimal PoolInitialCash = 0);
 
+/// <summary>池内个股收益折线：X=交易日，Y=累计收益率%。</summary>
+public record PoolReturnSeriesDto(
+    IReadOnlyList<string> Dates,
+    IReadOnlyList<PoolReturnSeriesLineDto> Series);
+
+public record PoolReturnSeriesLineDto(
+    string Symbol,
+    string Name,
+    StockTradeStyle TradeStyle,
+    decimal InitialCash,
+    IReadOnlyList<PoolReturnPointDto> Points);
+
+public record PoolReturnPointDto(
+    string Date,
+    decimal? ReturnPct,
+    decimal DayRealizedPnL,
+    decimal CumRealizedPnL,
+    decimal DayFees,
+    int TradeCount,
+    decimal WinRate,
+    decimal? AvailableCash = null,
+    decimal? PositionCost = null);
+
 public record AiJobDto(
     Guid Id,
     AiJobType JobType,
@@ -268,7 +293,8 @@ public record AiQueueItemDetailDto(
 public record CreateInvestmentGoalRequest(
     decimal ExpectedReturnPct,
     int HorizonDays,
-    string ThemePreference);
+    string ThemePreference,
+    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT);
 
 public record InvestmentGoalDto(
     Guid Id,
@@ -284,7 +310,8 @@ public record InvestmentGoalDto(
     int StockCount,
     decimal? LatestAchievementRate,
     decimal? LatestPortfolioReturnPct,
-    DateTime CreationTime);
+    DateTime CreationTime,
+    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT);
 
 public record InvestmentGoalStockDto(
     Guid Id,

@@ -78,6 +78,7 @@ public sealed class AiQueueAppService
 
     public async Task<int> EnqueueStrategyRefreshAllAsync(bool nightly, CancellationToken ct = default)
     {
+        // 含趋势股：夜更刷新高低预测，供下一交易日低位建仓（引擎仍跳过做T）
         var items = await _db.StockPoolItems
             .Where(i => i.BoundStrategyId != null)
             .Select(i => new { i.Id, i.Symbol, i.Name })

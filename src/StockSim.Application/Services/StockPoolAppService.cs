@@ -64,7 +64,7 @@ public class StockPoolAppService
             .Where(i => i.StockPoolId == poolId)
             .Select(i => new StockPoolItemDto(
                 i.Id, i.StockPoolId, i.Symbol, i.Name, i.Tags, i.Source,
-                i.BoundStrategyId, i.StrategyUpdatedAt, i.InitialCash, i.AvailableCash, i.NotifyOnTrade))
+                i.BoundStrategyId, i.StrategyUpdatedAt, i.InitialCash, i.AvailableCash, i.NotifyOnTrade, i.TradeStyle))
             .ToListAsync(ct);
     }
 
@@ -102,6 +102,7 @@ public class StockPoolAppService
         string? name,
         string? tags,
         PoolItemSource source = PoolItemSource.Manual,
+        StockTradeStyle tradeStyle = StockTradeStyle.IntradayT,
         CancellationToken ct = default)
     {
         var query = !string.IsNullOrWhiteSpace(symbol) ? symbol : name;
@@ -162,16 +163,19 @@ public class StockPoolAppService
             finalSymbol = resolved.Symbol;
         }
 
+        // 趋势股也需 AI/ATR 高低预测以支撑「预测低位建仓」，但不走做T引擎
         var item = await AddItemAsync(
             poolId,
             new AddPoolItemRequest(finalSymbol, finalName, tags, null),
             source,
             autoGenerateStrategy: true,
-            ct);
+            tradeStyle: tradeStyle,
+            ct: ct);
 
-        return (item, item is null
-            ? "添加失败"
-            : $"已添加 {finalName}({finalSymbol})，默认策略已就绪，AI 正在后台优化");
+        if (item is null) return (null, "添加失败");
+        return tradeStyle == StockTradeStyle.TrendSwing
+            ? (item, $"已添加趋势股 {finalName}({finalSymbol})，下一交易日起按预测低位建仓（上限{StrategyEngineService.TrendMaxPositionCash:N0}），不做自动做T")
+            : (item, $"已添加 {finalName}({finalSymbol})，默认策略已就绪，AI 正在后台优化");
     }
 
     public async Task<StockPoolItemDto?> AddItemAsync(
@@ -179,6 +183,7 @@ public class StockPoolAppService
         AddPoolItemRequest request,
         PoolItemSource source = PoolItemSource.Manual,
         bool autoGenerateStrategy = true,
+        StockTradeStyle tradeStyle = StockTradeStyle.IntradayT,
         CancellationToken ct = default)
     {
         var symbol = request.Symbol.Trim().ToUpperInvariant();
@@ -186,6 +191,12 @@ public class StockPoolAppService
             i => i.StockPoolId == poolId && i.Symbol == symbol, ct);
         if (exists is not null)
         {
+            if (exists.TradeStyle != tradeStyle)
+            {
+                exists.TradeStyle = tradeStyle;
+                await _db.SaveChangesAsync(ct);
+            }
+
             if (autoGenerateStrategy && !exists.BoundStrategyId.HasValue)
             {
                 await _perStockStrategy.EnsureDefaultStrategyAsync(exists.Id, ct);
@@ -211,9 +222,10 @@ public class StockPoolAppService
             Tags = request.Tags,
             Remark = request.Remark,
             Source = source,
+            TradeStyle = tradeStyle,
             InitialCash = DefaultPerStockCash,
             AvailableCash = DefaultPerStockCash,
-            // 入池当日可按行情建底仓；下一交易日起才自动做 T
+            // 入池当日可按行情建底仓；下一交易日起才自动做 T（趋势股仍保留字段，但引擎会跳过做T）
             AllowTFromDate = AShareMarketSession.NextTradingDay(DateTime.Today)
         };
         _db.StockPoolItems.Add(item);
@@ -361,5 +373,5 @@ public class StockPoolAppService
 
     private static StockPoolItemDto MapItem(StockPoolItem i) =>
         new(i.Id, i.StockPoolId, i.Symbol, i.Name, i.Tags, i.Source, i.BoundStrategyId, i.StrategyUpdatedAt,
-            i.InitialCash, i.AvailableCash, i.NotifyOnTrade);
+            i.InitialCash, i.AvailableCash, i.NotifyOnTrade, i.TradeStyle);
 }

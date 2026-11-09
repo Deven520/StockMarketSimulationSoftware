@@ -44,7 +44,9 @@ public sealed class CursorSdkAiClient : ICursorAiClient
             "严格只输出 JSON：{prompt,rationale,analysis}，不要其它文字。" +
             "本步 JSON 不要直接列股票；但 prompt 字段必须要求下一步输出 3~5 只具体 A 股（含代码/名称/理由/风险），" +
             "且 prompt 中禁止写「不要输出股票代码」。" +
-            "prompt 必须显式包含：预期收益%、预期周期（天）、题材偏好。" +
+            "prompt 必须显式包含：预期收益%、预期周期（天）、题材偏好、选股类型（做T股或趋势股）。" +
+            "若 tradeStyle=TrendSwing/趋势股：强调底部反转或中期趋势观察，不要按日内做T选股；" +
+            "若做T股：强调流动性与适中波动、适合高抛低吸。" +
             goalSummary;
         return RunAsync("GoalToPrompt", instruction, goalPayloadJson, ct);
     }
@@ -60,7 +62,10 @@ public sealed class CursorSdkAiClient : ICursorAiClient
             var theme = root.TryGetProperty("themePreference", out var t) && t.ValueKind == JsonValueKind.String
                 ? t.GetString() ?? "?"
                 : "?";
-            return $" 目标摘要：预期收益 {expected}% ，周期 {days} 天，题材「{theme}」。";
+            var style = root.TryGetProperty("tradeStyleLabel", out var sl) && sl.ValueKind == JsonValueKind.String
+                ? sl.GetString()
+                : root.TryGetProperty("tradeStyle", out var st) ? st.ToString() : "做T股";
+            return $" 目标摘要：类型「{style}」，预期收益 {expected}% ，周期 {days} 天，题材「{theme}」。";
         }
         catch
         {

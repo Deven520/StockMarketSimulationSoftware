@@ -26,9 +26,22 @@
         <input id="nameInput" name="name" class="form-control" placeholder="股票名称（可空）" />
     </div>
     <div class="col-md-2"><input name="tags" class="form-control" placeholder="标签" /></div>
+    <div class="col-md-2">
+        <select name="tradeStyle" class="form-select" title="交易类型">
+            <option value="IntradayT" selected>做T股</option>
+            <option value="TrendSwing">趋势股</option>
+        </select>
+    </div>
     <div class="col-auto"><button class="btn btn-primary" type="submit">添加</button></div>
-    <div class="col-12"><span class="text-muted small">代码、名称至少填一项；输入时弹出联想，点选即可。</span></div>
+    <div class="col-12"><span class="text-muted small">代码、名称至少填一项；趋势股仅观察，不挂做T策略。</span></div>
 </form>
+<div class="mb-2">
+    <div class="btn-group btn-group-sm" role="group" aria-label="类型筛选">
+        <button type="button" class="btn btn-outline-secondary active" data-style-filter="all">全部</button>
+        <button type="button" class="btn btn-outline-secondary" data-style-filter="t">做T股</button>
+        <button type="button" class="btn btn-outline-secondary" data-style-filter="trend">趋势股</button>
+    </div>
+</div>
 <div class="row g-2 mb-3 align-items-center">
     <div class="col-auto">
         <form asp-action="Import" method="post" enctype="multipart/form-data" class="row g-2">
@@ -61,6 +74,7 @@
         <tr>
             <th>代码</th>
             <th>名称</th>
+            <th>类型</th>
             <th>最新价</th>
             <th>涨跌幅</th>
             <th>持仓</th>
@@ -80,11 +94,22 @@
     @foreach (var i in Model)
     {
         var dayUp = (i.TodayRealizedPnL ?? 0) >= 0;
-        <tr data-symbol="@i.Symbol" data-qty="@i.PositionQty" data-avg="@i.AvgCost">
+        <tr data-symbol="@i.Symbol" data-qty="@i.PositionQty" data-avg="@i.AvgCost"
+            data-trade-style="@(i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing ? "trend" : "t")">
             <td>
                 <a asp-action="Stock" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId" class="fw-semibold text-decoration-none">@i.Symbol</a>
             </td>
             <td>@i.Name</td>
+            <td>
+                @if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing)
+                {
+                    <span class="badge bg-info text-dark">趋势</span>
+                }
+                else
+                {
+                    <span class="badge bg-primary">做T</span>
+                }
+            </td>
             <td class="js-last text-muted">…</td>
             <td class="js-chg text-muted">…</td>
             <td>@i.PositionQty</td>
@@ -123,7 +148,11 @@
                 }
             </td>
             <td>
-                @if (i.IsStrategyRunning)
+                @if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing)
+                {
+                    <span class="badge bg-info text-dark">@i.RuntimeStatusText</span>
+                }
+                else if (i.IsStrategyRunning)
                 {
                     <span class="badge bg-success">运行中</span>
                 }
@@ -301,5 +330,17 @@
     }
 
     refreshQuotes();
+
+    document.querySelectorAll('[data-style-filter]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const filter = btn.getAttribute('data-style-filter') || 'all';
+            document.querySelectorAll('[data-style-filter]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            table.querySelectorAll('tbody tr[data-trade-style]').forEach(tr => {
+                const style = tr.getAttribute('data-trade-style');
+                tr.style.display = (filter === 'all' || style === filter) ? '' : 'none';
+            });
+        });
+    });
 })();
 </script>

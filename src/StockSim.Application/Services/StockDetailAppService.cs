@@ -137,7 +137,8 @@ public class StockDetailAppService
                 && activeStrategyIds.Contains(b.StrategyDefinitionId));
             var poolHasStrategy = !boundSymbolSet.Contains(item.Symbol)
                                   && bindings.Any(b => b.StockPoolId == poolId && string.IsNullOrEmpty(b.Symbol));
-            var hasActiveStrategy = hasBound || symbolHasStrategy || poolHasStrategy;
+            var isTrend = item.TradeStyle == StockTradeStyle.TrendSwing;
+            var hasActiveStrategy = !isTrend && (hasBound || symbolHasStrategy || poolHasStrategy);
             var isRunning = hasActiveStrategy && marketOpen;
             string? strategyName = null;
             if (item.BoundStrategyId.HasValue)
@@ -148,6 +149,17 @@ public class StockDetailAppService
             forecastBySymbol.TryGetValue(item.Symbol, out var fc);
             aiAvgBySymbol.TryGetValue(item.Symbol, out var aiAvg);
             atrAvgBySymbol.TryGetValue(item.Symbol, out var atrAvg);
+            string statusText;
+            if (isTrend)
+            {
+                statusText = qty >= 100
+                    ? "趋势持仓"
+                    : marketOpen ? "待低位建仓" : "趋势观察";
+            }
+            else
+            {
+                statusText = isRunning ? "运行中" : "未运行";
+            }
             rows.Add(new PoolStockRowDto(
                 item.Id,
                 item.StockPoolId,
@@ -163,7 +175,7 @@ public class StockDetailAppService
                 isRunning,
                 hasActiveStrategy,
                 marketOpen,
-                isRunning ? "运行中" : "未运行",
+                statusText,
                 sessionLabel,
                 item.BoundStrategyId,
                 strategyName,
@@ -182,7 +194,8 @@ public class StockDetailAppService
                 fc?.Status.ToString(),
                 fc?.Source.ToString(),
                 aiAvgBySymbol.ContainsKey(item.Symbol) ? aiAvg : null,
-                atrAvgBySymbol.ContainsKey(item.Symbol) ? atrAvg : null));
+                atrAvgBySymbol.ContainsKey(item.Symbol) ? atrAvg : null,
+                item.TradeStyle));
         }
 
         return rows;

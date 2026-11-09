@@ -74,6 +74,7 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
         TradeAlertMessage message,
         CancellationToken cancellationToken)
     {
+        var title = message.FormatTitle();
         var text = message.FormatText(_options.TitlePrefix);
         var anyOk = false;
 
@@ -81,15 +82,15 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
             anyOk |= await TrySendWebhookAsync(text, cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(_options.PushPlusToken))
-            anyOk |= await TrySendPushPlusAsync(text, cancellationToken);
+            anyOk |= await TrySendPushPlusAsync(title, text, cancellationToken);
 
         if (string.IsNullOrWhiteSpace(_options.WebhookUrl)
             && string.IsNullOrWhiteSpace(_options.PushPlusToken))
         {
-            _logger.LogWarning("No WebhookUrl / PushPlusToken configured. Message: {Text}", text);
+            _logger.LogWarning("No WebhookUrl / PushPlusToken configured. Title: {Title} Message: {Text}", title, text);
         }
 
-        return (text, anyOk);
+        return ($"{title} · {text}", anyOk);
     }
 
     private async Task<bool> TrySendWebhookAsync(string text, CancellationToken ct)
@@ -140,14 +141,14 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
         }
     }
 
-    private async Task<bool> TrySendPushPlusAsync(string text, CancellationToken ct)
+    private async Task<bool> TrySendPushPlusAsync(string title, string text, CancellationToken ct)
     {
         try
         {
             var payload = new Dictionary<string, string>
             {
                 ["token"] = _options.PushPlusToken!,
-                ["title"] = _options.TitlePrefix,
+                ["title"] = string.IsNullOrWhiteSpace(title) ? _options.TitlePrefix : title,
                 ["content"] = text,
                 ["template"] = "txt"
             };
