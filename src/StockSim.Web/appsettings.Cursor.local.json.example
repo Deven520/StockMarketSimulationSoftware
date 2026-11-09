@@ -1,13 +1,13 @@
-﻿{
-  "AI": {
-    "Cursor": {
-      "Enabled": true,
-      "Model": "composer-2.5",
-      "TimeoutSeconds": 180,
-      "FallbackToPlaceholder": true,
-      "NodeExecutable": "D:\\Projects\\StockMarketSimulationSoftware\\tools\\node\\node.exe",
-      "BridgeDirectory": "adapters/cursor-agent-bridge",
-      "ApiKey": ""
-    }
-  }
+{
+    "AI":  {
+               "Cursor":  {
+                              "Enabled":  true,
+                              "Model":  "composer-2.5",
+                              "TimeoutSeconds":  180,
+                              "FallbackToPlaceholder":  true,
+                              "NodeExecutable":  "D:\\Projects\\StocksMarketWeb\\StockMarketSimulationSoftware\\StockMarketSimulationSoftware-main\\tools\\node\\node.exe",
+                              "BridgeDirectory":  "adapters/cursor-agent-bridge",
+                              "ApiKey":  ""
+                          }
+           }
 }

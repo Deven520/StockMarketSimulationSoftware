@@ -4,8 +4,7 @@
     Guid poolId = ViewBag.PoolId;
     var poolName = (string)(ViewBag.PoolName ?? "股票池");
     var session = Model.FirstOrDefault()?.MarketSessionText ?? "-";
-    var forecastTarget = Model.FirstOrDefault(x => x.ForecastForDate.HasValue)?.ForecastForDate
-                         ?? PriceForecastMetrics.ResolveForecastTargetDate(DateTime.Now);
+    var forecastTarget = PriceForecastMetrics.ResolveForecastTargetDate(DateTime.Now);
     var forecastCol = $"预测高/低 ({forecastTarget:MM-dd})";
 }
 <div class="mb-3">
@@ -276,10 +275,13 @@
                     upnlEl.textContent = '-';
                     return;
                 }
-                lastEl.textContent = fmt(q.lastPrice, 2);
-                setTone(lastEl, q.changePercent);
-                chgEl.textContent = q.changePercent == null ? '-' : ((q.changePercent >= 0 ? '+' : '') + Number(q.changePercent).toFixed(2) + '%');
-                setTone(chgEl, q.changePercent);
+                const lastOk = q.lastPrice != null && Number(q.lastPrice) > 0;
+                lastEl.textContent = lastOk ? fmt(q.lastPrice, 2) : '-';
+                setTone(lastEl, lastOk ? q.changePercent : null);
+                chgEl.textContent = (!lastOk || q.changePercent == null)
+                    ? '-'
+                    : ((q.changePercent >= 0 ? '+' : '') + Number(q.changePercent).toFixed(2) + '%');
+                setTone(chgEl, lastOk ? q.changePercent : null);
                 mvEl.textContent = q.marketValue == null ? '-' : fmt(q.marketValue, 0);
                 mvEl.classList.remove('text-muted');
                 upnlEl.textContent = q.unrealizedPnL == null ? '-' : fmt(q.unrealizedPnL, 2);

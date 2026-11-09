@@ -55,18 +55,27 @@ public class StockDetailAppService
             .Where(t => symbols.Contains(t.Symbol) && t.TradeDate == today)
             .ToListAsync(ct);
 
-        // 下一开盘日预测：与策略刷新同一规则（开市前=当日，否则下一交易日）
+        // 收盘前展示/刷新当日预测；收盘后切下一交易日。兼容旧数据：当日缺失时回退到下一交易日预测。
         var forecastTarget = PriceForecastMetrics.ResolveForecastTargetDate(now);
+        var fallbackTarget = PriceForecastMetrics.IsSameDayForecastWindow(now)
+            ? PriceForecastMetrics.NextTradingDay(now.Date)
+            : (DateTime?)null;
+        var forecastDates = fallbackTarget is null
+            ? new[] { forecastTarget.Date }
+            : new[] { forecastTarget.Date, fallbackTarget.Value.Date };
         var forecastRows = symbols.Count == 0
             ? new List<PriceRangeForecast>()
             : await _db.PriceRangeForecasts
-                .Where(f => symbols.Contains(f.Symbol) && f.ForecastForDate == forecastTarget.Date)
+                .Where(f => symbols.Contains(f.Symbol) && forecastDates.Contains(f.ForecastForDate))
                 .ToListAsync(ct);
         var forecastBySymbol = forecastRows
             .GroupBy(f => f.Symbol, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 g => g.Key,
-                g => g.OrderByDescending(x => x.PredictedAt).First(),
+                g => g
+                    .OrderBy(x => x.ForecastForDate.Date == forecastTarget.Date ? 0 : 1)
+                    .ThenByDescending(x => x.PredictedAt)
+                    .First(),
                 StringComparer.OrdinalIgnoreCase);
 
         var boundSymbolSet = items
@@ -169,7 +178,7 @@ public class StockDetailAppService
                 string.Equals(p.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
             var qty = pos?.Quantity ?? 0;
             var avg = pos?.AvgCost ?? 0;
-            decimal? last = q?.Last;
+            decimal? last = q is { Last: > 0 } ? q.Last : null;
             decimal? mv = last.HasValue ? last.Value * qty : null;
             decimal? upnl = last.HasValue && qty > 0 ? (last.Value - avg) * qty : qty == 0 ? 0 : null;
 

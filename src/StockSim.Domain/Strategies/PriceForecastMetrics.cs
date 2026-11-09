@@ -50,18 +50,22 @@ public static class PriceForecastMetrics
     }
 
     /// <summary>
-    /// 开市前（交易日且本地时间 &lt; 09:30）→ 预测当日高低；
-    /// 否则（已开市/收盘后/非交易日）→ 预测下一交易日高低。
+    /// 交易日且本地时间 &lt; 15:00 → 预测/展示当日高低；
+    /// 否则（已收盘后/非交易日）→ 预测下一交易日高低。
     /// </summary>
     public static DateTime ResolveForecastTargetDate(DateTime localNow)
     {
-        if (AShareMarketSession.IsTradingDay(localNow) && localNow.TimeOfDay < MarketOpenTime)
+        if (AShareMarketSession.IsTradingDay(localNow) && localNow.TimeOfDay < MarketCloseTime)
             return localNow.Date;
         return NextTradingDay(localNow.Date);
     }
 
-    public static bool IsPreOpenForecast(DateTime localNow)
-        => AShareMarketSession.IsTradingDay(localNow) && localNow.TimeOfDay < MarketOpenTime;
+    /// <summary>当日收盘前（含盘中）仍以当日为预测目标日。</summary>
+    public static bool IsSameDayForecastWindow(DateTime localNow)
+        => AShareMarketSession.IsTradingDay(localNow) && localNow.TimeOfDay < MarketCloseTime;
+
+    /// <summary>兼容旧名：等同 <see cref="IsSameDayForecastWindow"/>。</summary>
+    public static bool IsPreOpenForecast(DateTime localNow) => IsSameDayForecastWindow(localNow);
 
     public static decimal DeviationPct(decimal predicted, decimal actual)
     {

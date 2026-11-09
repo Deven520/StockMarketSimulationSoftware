@@ -267,9 +267,7 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         if (!eff.BaseBuildEnabled)
             return None(quote.Symbol, id, poolId, "baseBuild 已关闭，等待人工建仓");
 
-        if (SessionWindowHelper.IsInAnyWindow(ctx.Now, eff.AvoidWindows))
-            return None(quote.Symbol, id, poolId, "建底仓：avoid 时段观望");
-
+        // 建底仓尽快完成：不受做T用的 avoid 窗口限制（否则 09:30-09:45 开市首刻无法建仓）
         if (eff.BaseBuildRequirePreferWindow
             && !SessionWindowHelper.IsInAnyWindow(ctx.Now, eff.PreferWindows))
             return None(quote.Symbol, id, poolId, "建底仓：等待 prefer 时段");

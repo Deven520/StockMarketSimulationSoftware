@@ -109,6 +109,20 @@ public class StrategyEngineService
                     position.Name = poolItem.Name;
 
                 var runtime = await GetOrLoadRuntimeAsync(symbol, now, ct);
+                // 相对盘中已跟踪开盘价异常跳动（如模拟假价混入）则跳过本轮，避免错价成交
+                var prevSnap = _sessionTracker.TryGet(symbol);
+                if (prevSnap is { Open: > 0 } && quote.LastPrice > 0)
+                {
+                    var jumpPct = Math.Abs(quote.LastPrice - prevSnap.Open) / prevSnap.Open * 100m;
+                    if (jumpPct > 25m)
+                    {
+                        _logger.LogWarning(
+                            "Skip abnormal quote {Symbol}: last={Last} open={Open} jump={Jump:F1}%",
+                            symbol, quote.LastPrice, prevSnap.Open, jumpPct);
+                        continue;
+                    }
+                }
+
                 var snap = _sessionTracker.Update(quote, now);
                 var overrides = _adaptive.Adjust(policy, runtime, snap, now);
                 var effective = policy.ToEffective(overrides);

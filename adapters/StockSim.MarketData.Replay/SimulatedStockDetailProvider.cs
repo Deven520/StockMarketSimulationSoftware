@@ -110,7 +110,8 @@ public sealed class SimulatedStockDetailProvider : IStockDetailProvider
             PeTtm = detail.Fundamentals.PeTtm,
             Pb = detail.Fundamentals.Pb,
             Industry = detail.Fundamentals.Industry,
-            AsOf = detail.Board.AsOf
+            AsOf = detail.Board.AsOf,
+            IsSimulated = true
         };
     }
 

@@ -176,7 +176,7 @@ public sealed class FileCursorAiClient : ICursorAiClient
                 $"1. 理解优化目标：「{prompt}」。\n" +
                 "2. 结合近期盈亏与成交次数，建议略收紧单笔仓位、放宽日内次数上限。\n" +
                 "3. 参数调整不得绕过涨跌停/资金等硬风控。\n" +
-                $"4. 占位预测目标日 {forecastTargetDate:yyyy-MM-dd} 高低：高 {predictedHigh} / 低 {predictedLow}（相对参考价 {last} ±1.5%；开市前=当日，否则=下一交易日）。",
+                $"4. 占位预测目标日 {forecastTargetDate:yyyy-MM-dd} 高低：高 {predictedHigh} / 低 {predictedLow}（相对参考价 {last} ±1.5%；交易日15:00前=当日，否则=下一交易日）。",
             steps = new[]
             {
                 "读取当前策略参数与近期盈亏",
@@ -229,7 +229,7 @@ public sealed class FileCursorAiClient : ICursorAiClient
                     predictedHigh,
                     predictedLow,
                     asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-                    rationale = "占位：按参考价±1.5%给出目标日高低区间（开市前=当日，否则=下一交易日）"
+                    rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）"
                 },
                 feeModel = "AShareDefault"
             },
@@ -239,7 +239,7 @@ public sealed class FileCursorAiClient : ICursorAiClient
                 predictedHigh,
                 predictedLow,
                 asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-                rationale = "占位：按参考价±1.5%给出目标日高低区间（开市前=当日，否则=下一交易日）"
+                rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）"
             },
             changeNote = $"AI占位建议：{prompt}",
             risk = "须人工确认后方可生效，不得绕过风控硬约束"

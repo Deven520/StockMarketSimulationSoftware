@@ -59,4 +59,19 @@ public class PriceForecastMetricsTests
         Assert.True(highDev < -70m);
         Assert.Equal(0m, combined);
     }
+
+    [Fact]
+    public void ResolveForecastTargetDate_Same_Trading_Day_Until_Close()
+    {
+        var morning = new DateTime(2026, 11, 9, 9, 34, 0);
+        Assert.Equal(new DateTime(2026, 11, 9), PriceForecastMetrics.ResolveForecastTargetDate(morning));
+        Assert.True(PriceForecastMetrics.IsSameDayForecastWindow(morning));
+
+        var beforeClose = new DateTime(2026, 11, 9, 14, 59, 0);
+        Assert.Equal(new DateTime(2026, 11, 9), PriceForecastMetrics.ResolveForecastTargetDate(beforeClose));
+
+        var afterClose = new DateTime(2026, 11, 9, 15, 0, 0);
+        Assert.Equal(new DateTime(2026, 11, 10), PriceForecastMetrics.ResolveForecastTargetDate(afterClose));
+        Assert.False(PriceForecastMetrics.IsSameDayForecastWindow(afterClose));
+    }
 }

@@ -62,11 +62,17 @@ StockSim.slnx
 
 ## 开发模式快速开始（SQLite）
 
+**Visual Studio（推荐）**：打开 `StockSim.slnx`，工具栏启动配置选 **「Web + Worker」** 后 F5（由 `StockSim.slnLaunch` 定义，会同时调试 Web 与 Worker）。若下拉没有该配置，先到 **工具 → 选项 → 环境 → 预览功能** 勾选 **Enable Multi-Project Launch Profiles**，再右键解决方案 → **Configure Startup Projects…**。
+
+命令行：
+
 ```powershell
-cd d:\Projects\StockMarketSimulationSoftware
+cd d:\Projects\StocksMarketWeb\StockMarketSimulationSoftware\StockMarketSimulationSoftware-main
 dotnet restore
 dotnet test
 dotnet run --project src\StockSim.Web
+# 另开终端：
+dotnet run --project src\StockSim.Worker
 ```
 
 浏览器打开提示地址即可使用（无需登录）。种子数据含：
@@ -74,13 +80,7 @@ dotnet run --project src\StockSim.Web
 - 模拟账户（100 万现金 + 茅台/平安底仓）
 - 默认做T池与策略
 
-另开终端启动 Worker：
-
-```powershell
-dotnet run --project src\StockSim.Worker
-```
-
-> 请先停止旧 Web 进程再编译/启动，避免 DLL 被锁定。
+> 请先停止旧 Web/Worker 进程再编译/启动，避免 DLL 被锁定。
 
 ## 切换 SQL Server 2012+
 

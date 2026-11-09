@@ -1,0 +1,31 @@
+[
+  {
+    "Name": "Web + Worker",
+    "Projects": [
+      {
+        "Path": "src\\StockSim.Web\\StockSim.Web.csproj",
+        "Action": "Start",
+        "DebugTarget": "http"
+      },
+      {
+        "Path": "src\\StockSim.Worker\\StockSim.Worker.csproj",
+        "Action": "Start",
+        "DebugTarget": "StockSim.Worker"
+      }
+    ]
+  },
+  {
+    "Name": "Web only",
+    "Projects": [
+      {
+        "Path": "src\\StockSim.Web\\StockSim.Web.csproj",
+        "Action": "Start",
+        "DebugTarget": "http"
+      },
+      {
+        "Path": "src\\StockSim.Worker\\StockSim.Worker.csproj",
+        "Action": "None"
+      }
+    ]
+  }
+]

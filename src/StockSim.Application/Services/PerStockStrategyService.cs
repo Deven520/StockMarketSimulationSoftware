@@ -204,11 +204,11 @@ public class PerStockStrategyService
 
         var asOfLocal = DateTime.Now;
         var forecastTargetDate = PriceForecastMetrics.ResolveForecastTargetDate(asOfLocal);
-        var forecastIsSameDay = PriceForecastMetrics.IsPreOpenForecast(asOfLocal);
-        var forecastDayLabel = forecastIsSameDay ? "当日（开市前刷新）" : "下一交易日";
+        var forecastIsSameDay = PriceForecastMetrics.IsSameDayForecastWindow(asOfLocal);
+        var forecastDayLabel = forecastIsSameDay ? "当日（收盘前）" : "下一交易日";
         var prompt = isNightlyUpdate
-            ? $"请为 {item.Symbol} {item.Name} 输出 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)。{goalClause}结合近21日行情、今日成交、决策日志、热点新闻与「高低价预测对账结果」迭代；只定边界与偏好（triggers/sizing/risk/session/style），不要输出盘中下单指令。必须在 parameters.forecast（或根级 forecast）给出对{forecastDayLabel} {forecastTargetDate:yyyy-MM-dd} 的 predictedHigh / predictedLow（元）。规则：开市前刷新预测当日高低，否则预测下一交易日高低。"
-            : $"请为 {item.Symbol} {item.Name} 生成 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)：style/aggression/session/triggers(含 anchor=vwap 与 buy/sellDeviationPct 的 base/min/max)/sizing/risk/factors/aiNotes/forecast。{goalClause}forecast 须含 forDate={forecastTargetDate:yyyy-MM-dd}、predictedHigh、predictedLow（预测{forecastDayLabel}最高/最低价）。规则：开市前刷新预测当日高低，否则预测下一交易日高低。用于状态机「先高抛后低吸」做T，参数是边界不是死脚本。";
+            ? $"请为 {item.Symbol} {item.Name} 输出 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)。{goalClause}结合近21日行情、今日成交、决策日志、热点新闻与「高低价预测对账结果」迭代；只定边界与偏好（triggers/sizing/risk/session/style），不要输出盘中下单指令。必须在 parameters.forecast（或根级 forecast）给出对{forecastDayLabel} {forecastTargetDate:yyyy-MM-dd} 的 predictedHigh / predictedLow（元）。规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。"
+            : $"请为 {item.Symbol} {item.Name} 生成 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)：style/aggression/session/triggers(含 anchor=vwap 与 buy/sellDeviationPct 的 base/min/max)/sizing/risk/factors/aiNotes/forecast。{goalClause}forecast 须含 forDate={forecastTargetDate:yyyy-MM-dd}、predictedHigh、predictedLow（预测{forecastDayLabel}最高/最低价）。规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。用于状态机「先高抛后低吸」做T，参数是边界不是死脚本。";
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -248,7 +248,7 @@ public class PerStockStrategyService
             forecastEvaluation,
             forecastTargetDate = forecastTargetDate.ToString("yyyy-MM-dd"),
             forecastScope = forecastIsSameDay ? "sameTradingDay" : "nextTradingDay",
-            forecastRule = "开市前(交易日<09:30)预测当日高低；否则预测下一交易日高低",
+            forecastRule = "交易日且本地时间<15:00预测当日高低；否则预测下一交易日高低",
             expectedOutput = new
             {
                 analysis = "string",
