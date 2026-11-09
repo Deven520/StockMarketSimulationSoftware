@@ -337,6 +337,8 @@ public static class DbInitializer
                     RangeHit INTEGER NULL,
                     EvaluatedAt TEXT NULL,
                     Status INTEGER NOT NULL,
+                    Source INTEGER NOT NULL DEFAULT 1,
+                    CountsTowardAccuracy INTEGER NOT NULL DEFAULT 1,
                     StrategyDefinitionId TEXT NULL,
                     StrategyVersionId TEXT NULL,
                     AiJobId TEXT NULL,
@@ -345,9 +347,15 @@ public static class DbInitializer
                 );
                 """);
             await TryAddSqliteColumnAsync(db, "AppPriceRangeForecasts", "Prompt", "TEXT");
+            await TryAddSqliteColumnAsync(db, "AppPriceRangeForecasts", "Source", "INTEGER NOT NULL DEFAULT 1");
+            await TryAddSqliteColumnAsync(db, "AppPriceRangeForecasts", "CountsTowardAccuracy", "INTEGER NOT NULL DEFAULT 1");
             await db.Database.ExecuteSqlRawAsync("""
                 CREATE INDEX IF NOT EXISTS IX_AppPriceRangeForecasts_Symbol_ForecastForDate
                 ON AppPriceRangeForecasts (Symbol, ForecastForDate);
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE INDEX IF NOT EXISTS IX_AppPriceRangeForecasts_Symbol_Date_Source
+                ON AppPriceRangeForecasts (Symbol, ForecastForDate, Source);
                 """);
             await db.Database.ExecuteSqlRawAsync("""
                 CREATE INDEX IF NOT EXISTS IX_AppPriceRangeForecasts_Status_ForecastForDate

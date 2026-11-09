@@ -135,6 +135,15 @@ public class PerStockStrategyService
         return rows.Select(ToDto).ToList();
     }
 
+    public async Task<(bool Ok, string Message)> DeleteForecastAsync(Guid id, CancellationToken ct = default)
+    {
+        var row = await _db.PriceRangeForecasts.FirstOrDefaultAsync(f => f.Id == id, ct);
+        if (row is null) return (false, "预测记录不存在");
+        _db.PriceRangeForecasts.Remove(row);
+        await _db.SaveChangesAsync(ct);
+        return (true, "已删除预测记录");
+    }
+
     private async Task<Dtos.StrategyAiRunResult> GenerateOrRefreshAsync(
         Guid poolItemId,
         bool isNightlyUpdate,
@@ -206,9 +215,13 @@ public class PerStockStrategyService
         var forecastTargetDate = PriceForecastMetrics.ResolveForecastTargetDate(asOfLocal);
         var forecastIsSameDay = PriceForecastMetrics.IsSameDayForecastWindow(asOfLocal);
         var forecastDayLabel = forecastIsSameDay ? "当日（收盘前）" : "下一交易日";
+        var (meanHighDev, meanLowDev, avgAiAcc) = await LoadAiBiasStatsAsync(item.Symbol, ct);
+        var calibrationHint = avgAiAcc is null
+            ? "尚无足够 AI 预测对账样本；请独立给出高低价，勿用参考价±固定百分比占位。"
+            : $"近史 AI 预测平均偏差 高={meanHighDev:F2}% 低={meanLowDev:F2}% ，综合准确率={avgAiAcc:F1}；请据此纠偏，禁止输出占位区间。";
         var prompt = isNightlyUpdate
-            ? $"请为 {item.Symbol} {item.Name} 输出 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)。{goalClause}结合近21日行情、今日成交、决策日志、热点新闻与「高低价预测对账结果」迭代；只定边界与偏好（triggers/sizing/risk/session/style），不要输出盘中下单指令。必须在 parameters.forecast（或根级 forecast）给出对{forecastDayLabel} {forecastTargetDate:yyyy-MM-dd} 的 predictedHigh / predictedLow（元）。规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。"
-            : $"请为 {item.Symbol} {item.Name} 生成 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)：style/aggression/session/triggers(含 anchor=vwap 与 buy/sellDeviationPct 的 base/min/max)/sizing/risk/factors/aiNotes/forecast。{goalClause}forecast 须含 forDate={forecastTargetDate:yyyy-MM-dd}、predictedHigh、predictedLow（预测{forecastDayLabel}最高/最低价）。规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。用于状态机「先高抛后低吸」做T，参数是边界不是死脚本。";
+            ? $"请为 {item.Symbol} {item.Name} 输出 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)。{goalClause}结合近21日行情、今日成交、决策日志、热点新闻与「高低价预测对账结果」迭代；只定边界与偏好（triggers/sizing/risk/session/style），不要输出盘中下单指令。必须在 parameters.forecast（或根级 forecast）给出对{forecastDayLabel} {forecastTargetDate:yyyy-MM-dd} 的 predictedHigh / predictedLow（元），并设 source=ai、countsTowardAccuracy=true。{calibrationHint}规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。"
+            : $"请为 {item.Symbol} {item.Name} 生成 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)：style/aggression/session/triggers(含 anchor=vwap 与 buy/sellDeviationPct 的 base/min/max)/sizing/risk/factors/aiNotes/forecast。{goalClause}forecast 须含 forDate={forecastTargetDate:yyyy-MM-dd}、predictedHigh、predictedLow、source=ai、countsTowardAccuracy=true（预测{forecastDayLabel}最高/最低价）。{calibrationHint}规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。用于状态机「先高抛后低吸」做T，参数是边界不是死脚本。";
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -246,9 +259,16 @@ public class PerStockStrategyService
             todayTrades,
             recentDecisions,
             forecastEvaluation,
+            forecastCalibration = new
+            {
+                meanHighDeviationPct = meanHighDev,
+                meanLowDeviationPct = meanLowDev,
+                avgAiCombinedAccuracyPct = avgAiAcc
+            },
+            atrBaselineHint = PriceForecastMetrics.TryBuildAtrBaseline(detail?.DailyBars, forecastTargetDate),
             forecastTargetDate = forecastTargetDate.ToString("yyyy-MM-dd"),
             forecastScope = forecastIsSameDay ? "sameTradingDay" : "nextTradingDay",
-            forecastRule = "交易日且本地时间<15:00预测当日高低；否则预测下一交易日高低",
+            forecastRule = "交易日且本地时间<15:00预测当日高低；否则预测下一交易日高低；占位预测不得计入准确率",
             expectedOutput = new
             {
                 analysis = "string",
@@ -259,7 +279,9 @@ public class PerStockStrategyService
                     forDate = forecastTargetDate.ToString("yyyy-MM-dd"),
                     predictedHigh = 0,
                     predictedLow = 0,
-                    rationale = "string"
+                    rationale = "string",
+                    source = "ai",
+                    countsTowardAccuracy = true
                 },
                 changeNote = "string",
                 risk = "string"
@@ -287,7 +309,15 @@ public class PerStockStrategyService
 
             var parametersJson = parsed.ParametersJson ?? StrategyParameters.Default().ToJson();
             var policy = StrategyParameters.FromJson(parametersJson);
-            ApplyForecastToPolicy(policy, parsed.Forecast, detail, forecastTargetDate);
+            var atrBaseline = PriceForecastMetrics.TryBuildAtrBaseline(detail?.DailyBars, forecastTargetDate);
+            ApplyOperationalForecast(
+                policy,
+                parsed.Forecast,
+                atrBaseline,
+                meanHighDev,
+                meanLowDev,
+                avgAiAcc,
+                forecastTargetDate);
             parametersJson = policy.ToJson();
 
             Guid strategyId;
@@ -327,9 +357,11 @@ public class PerStockStrategyService
                 versionId = await GetCurrentVersionIdAsync(strategyId, ct);
             }
 
+            // AI/校准预测：占位不落准确率表；ATR 基线始终落库对照
             if (policy.Forecast is not null
                 && policy.Forecast.PredictedHigh > 0
-                && policy.Forecast.PredictedLow > 0)
+                && policy.Forecast.PredictedLow > 0
+                && !PriceForecastMetrics.IsPlaceholderForecast(policy.Forecast))
             {
                 await UpsertPendingForecastAsync(
                     item,
@@ -338,6 +370,19 @@ public class PerStockStrategyService
                     versionId,
                     job.Id,
                     prompt,
+                    forecastTargetDate,
+                    ct);
+            }
+
+            if (atrBaseline is not null)
+            {
+                await UpsertPendingForecastAsync(
+                    item,
+                    atrBaseline,
+                    strategyId,
+                    versionId,
+                    job.Id,
+                    "[ATR baseline]",
                     forecastTargetDate,
                     ct);
             }
@@ -538,9 +583,10 @@ public class PerStockStrategyService
             row.RangeHit = rangeHit;
             row.EvaluatedAt = now;
             row.Status = ForecastStatus.Evaluated;
+            row.CountsTowardAccuracy = PriceForecastMetrics.ShouldCountTowardAccuracy(row.Source);
             row.Notes = reevaluated
-                ? $"容差 {PriceForecastMetrics.DefaultTolerancePct}%；已按日K重算"
-                : $"容差 {PriceForecastMetrics.DefaultTolerancePct}%";
+                ? $"来源 {row.Source}；容差 {PriceForecastMetrics.DefaultTolerancePct}%；已按日K重算"
+                : $"来源 {row.Source}；容差 {PriceForecastMetrics.DefaultTolerancePct}%";
 
             results.Add(new
             {
@@ -583,9 +629,16 @@ public class PerStockStrategyService
         var low = Math.Min(forecast.PredictedHigh, forecast.PredictedLow);
         if (high <= 0 || low <= 0) return;
 
+        var source = PriceForecastMetrics.ParseSource(forecast.Source, forecast.CountsTowardAccuracy);
+        if (source == ForecastSource.Placeholder) return; // 双保险：占位不入库
+
+        var counts = forecast.CountsTowardAccuracy
+                     ?? PriceForecastMetrics.ShouldCountTowardAccuracy(source);
+
         var existing = await _db.PriceRangeForecasts.FirstOrDefaultAsync(
             f => f.Symbol == item.Symbol
                  && f.ForecastForDate == forDate
+                 && f.Source == source
                  && f.Status == ForecastStatus.Pending,
             ct);
 
@@ -595,6 +648,8 @@ public class PerStockStrategyService
             existing.PredictedHigh = high;
             existing.PredictedLow = low;
             existing.PredictedAt = DateTime.Now;
+            existing.Source = source;
+            existing.CountsTowardAccuracy = counts;
             existing.StrategyDefinitionId = strategyId;
             existing.StrategyVersionId = versionId;
             existing.AiJobId = aiJobId;
@@ -612,6 +667,8 @@ public class PerStockStrategyService
                 PredictedHigh = high,
                 PredictedLow = low,
                 Status = ForecastStatus.Pending,
+                Source = source,
+                CountsTowardAccuracy = counts,
                 StrategyDefinitionId = strategyId,
                 StrategyVersionId = versionId,
                 AiJobId = aiJobId,
@@ -628,37 +685,82 @@ public class PerStockStrategyService
         return strategy?.CurrentVersionId;
     }
 
-    private static void ApplyForecastToPolicy(
+    /// <summary>
+    /// 运营用预测写入 Policy：真实 AI（可校准）优先，否则 ATR 基线；禁止 ±% 占位污染。
+    /// 低准确率时下调 aggression。
+    /// </summary>
+    private static void ApplyOperationalForecast(
         StrategyParameters policy,
         ForecastPolicy? parsedForecast,
-        StockDetailBundle? detail,
+        ForecastPolicy? atrBaseline,
+        decimal meanHighDev,
+        decimal meanLowDev,
+        decimal? avgAiAcc,
         DateTime forecastTargetDate)
     {
         var target = forecastTargetDate.Date.ToString("yyyy-MM-dd");
-        var fc = parsedForecast ?? policy.Forecast;
-        if (fc is null
-            || fc.PredictedHigh <= 0
-            || fc.PredictedLow <= 0)
+        ForecastPolicy? operational = null;
+
+        var ai = parsedForecast ?? policy.Forecast;
+        if (ai is not null
+            && ai.PredictedHigh > 0
+            && ai.PredictedLow > 0
+            && !PriceForecastMetrics.IsPlaceholderForecast(ai))
         {
-            var last = detail?.Board?.Last
-                       ?? detail?.DailyBars?.OrderByDescending(d => d.Date).FirstOrDefault()?.Close
-                       ?? 0m;
-            if (last <= 0) return;
-            fc = new ForecastPolicy
-            {
-                ForDate = target,
-                PredictedHigh = Math.Round(last * 1.02m, 2),
-                PredictedLow = Math.Round(last * 0.98m, 2),
-                AsOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-                Rationale = "AI未给出有效预测，按昨收±2%占位"
-            };
+            if (ai.PredictedHigh < ai.PredictedLow)
+                (ai.PredictedHigh, ai.PredictedLow) = (ai.PredictedLow, ai.PredictedHigh);
+            ai.ForDate = target;
+            ai.AsOf ??= DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
+            ai.Source ??= PriceForecastMetrics.ToSourceKey(ForecastSource.Ai);
+            ai.CountsTowardAccuracy ??= true;
+
+            // 有历史偏差样本则校准
+            if (avgAiAcc.HasValue && (Math.Abs(meanHighDev) >= 0.05m || Math.Abs(meanLowDev) >= 0.05m))
+                operational = PriceForecastMetrics.ApplyBiasCalibration(ai, meanHighDev, meanLowDev);
+            else
+                operational = ai;
+        }
+        else if (atrBaseline is not null)
+        {
+            atrBaseline.ForDate = target;
+            operational = atrBaseline;
         }
 
-        fc.ForDate = target;
-        fc.AsOf ??= DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss");
-        if (fc.PredictedHigh < fc.PredictedLow)
-            (fc.PredictedHigh, fc.PredictedLow) = (fc.PredictedLow, fc.PredictedHigh);
-        policy.Forecast = fc;
+        policy.Forecast = operational;
+
+        var scale = PriceForecastMetrics.ResolveAggressionScale(avgAiAcc);
+        if (scale < 1m)
+        {
+            policy.Aggression = Math.Round(Math.Clamp(policy.Aggression * scale, 0.05m, 1m), 3);
+            policy.AiNotes = (policy.AiNotes ?? string.Empty)
+                + $" | 近史AI准确率{avgAiAcc:F1}偏低，aggression×{scale:F2}";
+        }
+    }
+
+    private async Task<(decimal MeanHighDev, decimal MeanLowDev, decimal? AvgCombined)> LoadAiBiasStatsAsync(
+        string symbol,
+        CancellationToken ct)
+    {
+        var from = DateTime.Today.AddDays(-PriceForecastMetrics.EvaluationLookbackDays);
+        var rows = await _db.PriceRangeForecasts.AsNoTracking()
+            .Where(f => f.Symbol == symbol
+                        && f.Status == ForecastStatus.Evaluated
+                        && f.CountsTowardAccuracy
+                        && f.ForecastForDate >= from
+                        && (f.Source == ForecastSource.Ai || f.Source == ForecastSource.CalibratedAi)
+                        && f.HighDeviationPct != null
+                        && f.LowDeviationPct != null
+                        && f.CombinedAccuracyPct != null)
+            .OrderByDescending(f => f.ForecastForDate)
+            .Take(20)
+            .ToListAsync(ct);
+
+        if (rows.Count < 2) return (0m, 0m, null);
+
+        var meanHigh = Math.Round(rows.Average(r => r.HighDeviationPct!.Value), 4);
+        var meanLow = Math.Round(rows.Average(r => r.LowDeviationPct!.Value), 4);
+        var avgAcc = Math.Round(rows.Average(r => r.CombinedAccuracyPct!.Value), 2);
+        return (meanHigh, meanLow, avgAcc);
     }
 
     private async Task BindSymbolAsync(Guid strategyId, Guid poolId, string symbol, CancellationToken ct)
@@ -736,7 +838,9 @@ public class PerStockStrategyService
                 PredictedHigh = high.Value,
                 PredictedLow = low.Value,
                 AsOf = GetString(el, "asOf"),
-                Rationale = GetString(el, "rationale") ?? GetString(el, "forecastRationale")
+                Rationale = GetString(el, "rationale") ?? GetString(el, "forecastRationale"),
+                Source = GetString(el, "source"),
+                CountsTowardAccuracy = GetBool(el, "countsTowardAccuracy")
             };
         }
 
@@ -746,7 +850,9 @@ public class PerStockStrategyService
             PredictedHigh = GetDecimal(fcEl, "predictedHigh") ?? 0,
             PredictedLow = GetDecimal(fcEl, "predictedLow") ?? 0,
             AsOf = GetString(fcEl, "asOf"),
-            Rationale = GetString(fcEl, "rationale")
+            Rationale = GetString(fcEl, "rationale"),
+            Source = GetString(fcEl, "source"),
+            CountsTowardAccuracy = GetBool(fcEl, "countsTowardAccuracy")
         };
     }
 
@@ -777,6 +883,18 @@ public class PerStockStrategyService
         if (p.ValueKind == JsonValueKind.String
             && decimal.TryParse(p.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out d))
             return d;
+        return null;
+    }
+
+    private static bool? GetBool(JsonElement el, string name)
+    {
+        if (el.ValueKind != JsonValueKind.Object || !el.TryGetProperty(name, out var p))
+            return null;
+        if (p.ValueKind is JsonValueKind.True) return true;
+        if (p.ValueKind is JsonValueKind.False) return false;
+        if (p.ValueKind == JsonValueKind.String
+            && bool.TryParse(p.GetString(), out var b))
+            return b;
         return null;
     }
 
@@ -811,7 +929,9 @@ public class PerStockStrategyService
         f.Status.ToString(),
         f.EvaluatedAt,
         f.Notes,
-        f.Prompt);
+        f.Prompt,
+        f.Source.ToString(),
+        f.CountsTowardAccuracy);
 
     private sealed record ParsedStrategyAi(
         string? Analysis,

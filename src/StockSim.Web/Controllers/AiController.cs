@@ -168,4 +168,31 @@ public class AiController : Controller
         TempData["Msg"] = r.Message;
         return RedirectToAction(nameof(Details), new { id = jobId, goalId });
     }
+
+    [HttpPost]
+    public async Task<IActionResult> DeleteQueueItem(Guid id, CancellationToken ct)
+    {
+        var r = await _queue.DeleteAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        TempData["MsgType"] = r.Ok ? "success" : "danger";
+        return RedirectToAction(nameof(Queue));
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> DeleteGoal(Guid id, CancellationToken ct)
+    {
+        var r = await _goals.DeleteAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        TempData["MsgType"] = r.Ok ? "success" : "danger";
+        return RedirectToAction(nameof(Goals));
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> DeleteJob(Guid id, CancellationToken ct)
+    {
+        var r = await _ai.DeleteJobAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        TempData["MsgType"] = r.Ok ? "success" : "danger";
+        return RedirectToAction(nameof(Index));
+    }
 }

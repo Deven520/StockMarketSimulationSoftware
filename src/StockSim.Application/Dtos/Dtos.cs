@@ -51,7 +51,10 @@ public record PoolStockRowDto(
     DateTime? ForecastForDate = null,
     decimal? PredictedHigh = null,
     decimal? PredictedLow = null,
-    string? ForecastStatus = null);
+    string? ForecastStatus = null,
+    string? ForecastSource = null,
+    decimal? AvgAiAccuracyPct = null,
+    decimal? AvgAtrAccuracyPct = null);
 
 /// <summary>一股一策 AI 刷新结果（供队列回写 Input/Output / Job 关联）。</summary>
 public record StrategyAiRunResult(
@@ -105,9 +108,11 @@ public record StockDetailPageDto(
     PriceRangeForecastDto? LatestForecast = null,
     IReadOnlyList<PriceRangeForecastDto>? ForecastHistory = null,
     decimal? AvgCombinedAccuracyPct = null,
-    Guid? PoolItemId = null);
+    Guid? PoolItemId = null,
+    decimal? AvgAiAccuracyPct = null,
+    decimal? AvgAtrAccuracyPct = null);
 
-/// <summary>次日高低价预测与对账准确率（含预测股票）。</summary>
+/// <summary>目标日高低价预测与对账准确率（含预测股票与来源）。</summary>
 public record PriceRangeForecastDto(
     Guid Id,
     string Symbol,
@@ -127,7 +132,9 @@ public record PriceRangeForecastDto(
     string Status,
     DateTime? EvaluatedAt,
     string? Notes,
-    string? Prompt = null);
+    string? Prompt = null,
+    string Source = "Ai",
+    bool CountsTowardAccuracy = true);
 
 public record IntradayBarDto(string Time, decimal Open, decimal Close, decimal Low, decimal High, long Volume);
 
@@ -178,7 +185,11 @@ public record DashboardDto(
     decimal TodayPnL,
     int TodayTradeCount,
     string TradingMode,
-    string Disclaimer);
+    string Disclaimer,
+    Guid? PoolId = null,
+    string? PoolName = null,
+    int PoolItemCount = 0,
+    decimal PoolInitialCash = 0);
 
 public record AiJobDto(
     Guid Id,

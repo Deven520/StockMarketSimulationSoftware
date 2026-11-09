@@ -92,6 +92,36 @@ public class StrategyAppService
         await _db.SaveChangesAsync(ct);
     }
 
+    /// <summary>删除策略：解绑、解除池成分引用后物理删除（含版本）。</summary>
+    public async Task<(bool Ok, string Message)> DeleteAsync(Guid strategyId, CancellationToken ct = default)
+    {
+        var strategy = await _db.Strategies.Include(s => s.Versions)
+            .FirstOrDefaultAsync(s => s.Id == strategyId, ct);
+        if (strategy is null) return (false, "策略不存在");
+
+        var bindings = await _db.StrategyBindings
+            .Where(b => b.StrategyDefinitionId == strategyId)
+            .ToListAsync(ct);
+        _db.StrategyBindings.RemoveRange(bindings);
+
+        var items = await _db.StockPoolItems
+            .Where(i => i.BoundStrategyId == strategyId)
+            .ToListAsync(ct);
+        foreach (var item in items)
+        {
+            item.BoundStrategyId = null;
+            item.LastModificationTime = DateTime.UtcNow;
+        }
+
+        strategy.CurrentVersionId = null;
+        await _db.SaveChangesAsync(ct);
+
+        _db.StrategyVersions.RemoveRange(strategy.Versions);
+        _db.Strategies.Remove(strategy);
+        await _db.SaveChangesAsync(ct);
+        return (true, $"已删除策略 {strategy.Name}");
+    }
+
     public async Task RollbackAsync(Guid strategyId, Guid versionId, CancellationToken ct = default)
     {
         var strategy = await _db.Strategies.Include(s => s.Versions).FirstOrDefaultAsync(s => s.Id == strategyId, ct);

@@ -76,11 +76,19 @@
                 <td class="small text-muted">@x.CreationTime.ToLocalTime().ToString("MM-dd HH:mm:ss")</td>
                 <td class="small text-muted">@(x.StartedAt?.ToLocalTime().ToString("HH:mm:ss") ?? "—")</td>
                 <td class="small text-muted">@(x.CompletedAt?.ToLocalTime().ToString("HH:mm:ss") ?? "—")</td>
-                <td>
+                <td class="text-nowrap">
                     <a class="btn btn-sm btn-outline-secondary" asp-action="QueueDetails" asp-route-id="@x.Id">详情</a>
                     @if (x.RelatedAiJobId.HasValue && x.Status == AiQueueItemStatus.Succeeded && x.TaskType == AiQueueTaskType.StockPick)
                     {
                         <a class="btn btn-sm btn-outline-success" asp-action="Details" asp-route-id="@x.RelatedAiJobId" asp-route-goalId="@x.RelatedGoalId">选股结果</a>
+                    }
+                    @if (x.Status != AiQueueItemStatus.Running)
+                    {
+                        <form asp-action="DeleteQueueItem" method="post" class="d-inline"
+                              onsubmit="return confirm('确认删除该队列项？');">
+                            <input type="hidden" name="id" value="@x.Id" />
+                            <button class="btn btn-sm btn-outline-danger">删除</button>
+                        </form>
                     }
                 </td>
             </tr>

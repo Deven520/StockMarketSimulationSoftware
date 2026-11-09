@@ -51,4 +51,30 @@ public class TradesController : Controller
         TempData["Msg"] = "日终结算完成";
         return RedirectToAction(nameof(PnL));
     }
+
+    [HttpPost]
+    public async Task<IActionResult> DeleteTrade(Guid id, CancellationToken ct)
+    {
+        var r = await _trading.DeleteTradeAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> ClearPosition(Guid id, CancellationToken ct)
+    {
+        var r = await _trading.ClearPositionAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        return RedirectToAction(nameof(Positions));
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> DeletePnL(Guid id, string? returnUrl, CancellationToken ct)
+    {
+        var r = await _pnl.DeleteDailyPnLAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        if (!string.IsNullOrWhiteSpace(returnUrl) && Url.IsLocalUrl(returnUrl))
+            return Redirect(returnUrl);
+        return RedirectToAction(nameof(PnL));
+    }
 }

@@ -3,19 +3,27 @@
     var history = (IReadOnlyList<StockSim.Application.Dtos.DailyPnLDto>)ViewBag.History;
 }
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2 class="mb-0">监控总览</h2>
+    <div>
+        <h2 class="mb-0">监控总览</h2>
+        @if (!string.IsNullOrWhiteSpace(Model.PoolName))
+        {
+            <div class="text-muted small mt-1">
+                当前股票池：@Model.PoolName · 成分 @Model.PoolItemCount 只 · 初始资金合计 @Model.PoolInitialCash.ToString("N0")
+            </div>
+        }
+    </div>
     <span class="badge bg-warning text-dark">@Model.Disclaimer</span>
 </div>
 <div class="row g-3 mb-4">
-    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">现金</div><div class="fs-4">@Model.Cash.ToString("N2")</div></div></div></div>
-    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">持仓成本市值</div><div class="fs-4">@Model.PositionMarketValue.ToString("N2")</div></div></div></div>
-    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">总资产</div><div class="fs-4">@Model.TotalAssets.ToString("N2")</div></div></div></div>
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">池内可用现金</div><div class="fs-4">@Model.Cash.ToString("N2")</div></div></div></div>
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">池内持仓成本</div><div class="fs-4">@Model.PositionMarketValue.ToString("N2")</div></div></div></div>
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">池内总资产</div><div class="fs-4">@Model.TotalAssets.ToString("N2")</div></div></div></div>
     <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">今日盈亏 / 成交</div><div class="fs-4">@Model.TodayPnL.ToString("N2") / @Model.TodayTradeCount</div></div></div></div>
 </div>
 <p class="text-muted">交易模式：@Model.TradingMode</p>
-<h4>近30日盈亏</h4>
+<h4>近30日盈亏（当前池）</h4>
 <table class="table table-sm table-striped">
-    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th></tr></thead>
+    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th><th></th></tr></thead>
     <tbody>
     @foreach (var x in history)
     {
@@ -26,6 +34,14 @@
             <td>@x.RealizedPnL.ToString("N2")</td>
             <td>@x.Fees.ToString("N2")</td>
             <td>@((x.WinRate * 100).ToString("N1"))%</td>
+            <td>
+                <form asp-controller="Trades" asp-action="DeletePnL" method="post" class="d-inline"
+                      onsubmit="return confirm('确认删除该盈亏记录？');">
+                    <input type="hidden" name="id" value="@x.Id" />
+                    <input type="hidden" name="returnUrl" value="@Url.Action("Index", "Dashboard")" />
+                    <button class="btn btn-sm btn-outline-danger">删除</button>
+                </form>
+            </td>
         </tr>
     }
     </tbody>

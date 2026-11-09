@@ -40,7 +40,7 @@ public sealed class StrategyParameters
     [JsonPropertyName("aiNotes")]
     public string? AiNotes { get; set; }
 
-    /// <summary>对下一交易日最高/最低价的预测（审计用，不直接作为盘中硬阈值）。</summary>
+    /// <summary>对目标交易日最高/最低价的预测；盘中做 T 用作软边界（非硬阈值）。</summary>
     [JsonPropertyName("forecast")]
     public ForecastPolicy? Forecast { get; set; }
 
@@ -276,7 +276,7 @@ public sealed class BaseBuildPolicy
     public bool RequirePreferWindow { get; set; }
 }
 
-/// <summary>次日高低价预测（写入 StrategyPolicy，并同步落准确率历史表）。</summary>
+/// <summary>目标日高低价预测（写入 StrategyPolicy，并同步落准确率历史表）。</summary>
 public sealed class ForecastPolicy
 {
     [JsonPropertyName("forDate")]
@@ -293,6 +293,14 @@ public sealed class ForecastPolicy
 
     [JsonPropertyName("rationale")]
     public string? Rationale { get; set; }
+
+    /// <summary>ai | atr_baseline | placeholder | calibrated_ai</summary>
+    [JsonPropertyName("source")]
+    public string? Source { get; set; }
+
+    /// <summary>占位预测应为 false，不进准确率榜。</summary>
+    [JsonPropertyName("countsTowardAccuracy")]
+    public bool? CountsTowardAccuracy { get; set; }
 }
 
 public sealed class ParamRange

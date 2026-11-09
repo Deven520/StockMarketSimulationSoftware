@@ -172,6 +172,11 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         {
             if (deviation <= eff.BuyDeviationPct && volOk)
             {
+                if (!PriceForecastMetrics.PassesForecastSoftBand(
+                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: false,
+                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlock))
+                    return None(quote.Symbol, id, poolId, softBlock ?? "预测软边界拦截低吸");
+
                 var buy = TryBuyBack(quote, position, tradeQty, eff, id, poolId,
                     $"低吸买回 偏离 {deviation:F2}%≤{eff.BuyDeviationPct:F2}%");
                 if (buy.Action == SignalAction.Buy)
@@ -190,6 +195,11 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         {
             if (deviation >= eff.SellDeviationPct && volOk)
             {
+                if (!PriceForecastMetrics.PassesForecastSoftBand(
+                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: true,
+                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlock))
+                    return None(quote.Symbol, id, poolId, softBlock ?? "预测软边界拦截高抛");
+
                 var sell = TrySellHigh(quote, position, tradeQty, eff, id, poolId,
                     $"高抛 偏离 {deviation:F2}%≥{eff.SellDeviationPct:F2}%");
                 if (sell.Action == SignalAction.Sell)
@@ -208,6 +218,11 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         {
             if (deviation >= eff.SellDeviationPct && volOk)
             {
+                if (!PriceForecastMetrics.PassesForecastSoftBand(
+                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: true,
+                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlockSell))
+                    return None(quote.Symbol, id, poolId, softBlockSell ?? "预测软边界拦截高抛");
+
                 var sell = TrySellHigh(quote, position, tradeQty, eff, id, poolId,
                     $"高抛 偏离 {deviation:F2}%≥{eff.SellDeviationPct:F2}%");
                 if (sell.Action == SignalAction.Sell)
@@ -221,6 +236,11 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
             // 风格为 mean_reversion 且持仓低于底仓：允许补回
             if (deviation <= eff.BuyDeviationPct && volOk && HasSoldHighDeficit(position))
             {
+                if (!PriceForecastMetrics.PassesForecastSoftBand(
+                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: false,
+                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlockBuy))
+                    return None(quote.Symbol, id, poolId, softBlockBuy ?? "预测软边界拦截低吸");
+
                 var buy = TryBuyBack(quote, position, tradeQty, eff, id, poolId,
                     $"补回底仓 偏离 {deviation:F2}%");
                 if (buy.Action == SignalAction.Buy)
@@ -236,6 +256,11 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 && deviation <= eff.BuyDeviationPct && volOk
                 && (position?.Quantity ?? 0) >= 100)
             {
+                if (!PriceForecastMetrics.PassesForecastSoftBand(
+                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: false,
+                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlockMom))
+                    return None(quote.Symbol, id, poolId, softBlockMom ?? "预测软边界拦截动量低吸");
+
                 var buy = new TradeSignal
                 {
                     Symbol = quote.Symbol,

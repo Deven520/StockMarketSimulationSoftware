@@ -82,3 +82,16 @@ public enum ForecastStatus
     Evaluated = 1,
     Skipped = 2
 }
+
+/// <summary>高低价预测来源。</summary>
+public enum ForecastSource
+{
+    /// <summary>模型/AI 直接输出。</summary>
+    Ai = 1,
+    /// <summary>近 N 日 ATR 高低带基线（用于对照）。</summary>
+    AtrBaseline = 2,
+    /// <summary>占位/兜底预测，不得计入准确率榜。</summary>
+    Placeholder = 3,
+    /// <summary>AI 输出经历史偏差校准后。</summary>
+    CalibratedAi = 4
+}

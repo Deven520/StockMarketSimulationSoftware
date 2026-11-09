@@ -215,6 +215,15 @@ public class PoolsController : Controller
     }
 
     [HttpPost]
+    public async Task<IActionResult> DeleteForecast(Guid id, string symbol, Guid? poolId, CancellationToken ct)
+    {
+        var r = await _perStock.DeleteForecastAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        TempData["MsgType"] = r.Ok ? "success" : "danger";
+        return RedirectToAction(nameof(Stock), new { symbol, poolId });
+    }
+
+    [HttpPost]
     public async Task<IActionResult> Import(Guid poolId, IFormFile file, CancellationToken ct)
     {
         using var reader = new StreamReader(file.OpenReadStream());

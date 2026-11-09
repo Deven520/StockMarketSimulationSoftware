@@ -40,7 +40,14 @@
             <td>@g.StockCount</td>
             <td>@(g.LatestPortfolioReturnPct?.ToString("N2") ?? "-")%</td>
             <td class="@(rateUp ? "text-danger" : "")">@(g.LatestAchievementRate?.ToString("N1") ?? "-")%</td>
-            <td><a asp-action="GoalDetails" asp-route-id="@g.Id">详情</a></td>
+            <td class="text-nowrap">
+                <a asp-action="GoalDetails" asp-route-id="@g.Id">详情</a>
+                <form asp-action="DeleteGoal" method="post" class="d-inline"
+                      onsubmit="return confirm('确认删除该投资目标？');">
+                    <input type="hidden" name="id" value="@g.Id" />
+                    <button class="btn btn-sm btn-outline-danger ms-1">删除</button>
+                </form>
+            </td>
         </tr>
     }
     </tbody>

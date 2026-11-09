@@ -299,6 +299,16 @@ public class StockPoolAppService
             if (strategy is not null) strategy.IsEnabled = false;
         }
 
+        // 清空该股持仓（池视角）
+        var positions = await _db.Positions.Where(p => p.Symbol == item.Symbol).ToListAsync(ct);
+        foreach (var p in positions)
+        {
+            p.Quantity = 0;
+            p.BaseQuantity = 0;
+            p.SellableQuantity = 0;
+            p.AvgCost = 0;
+        }
+
         var account = await _db.Accounts.FirstOrDefaultAsync(ct);
         if (account is not null)
         {

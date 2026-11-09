@@ -69,7 +69,7 @@
             <th>浮动盈亏</th>
             <th>今日盈亏</th>
             <th>可用资金</th>
-            <th title="下一开盘日高低价预测（开市前为当日，否则下一交易日）">@forecastCol</th>
+            <th title="目标日高低价预测（交易日15:00前=当日，否则下一交易日）；括号内为近史AI/ATR准确率">@forecastCol</th>
             <th>专属策略</th>
             <th>策略状态</th>
             <th>成交通知</th>
@@ -97,7 +97,11 @@
                 @if (i.PredictedHigh.HasValue && i.PredictedLow.HasValue)
                 {
                     <div class="fw-semibold">@i.PredictedHigh.Value.ToString("N2") / @i.PredictedLow.Value.ToString("N2")</div>
-                    <div class="text-muted">@(i.ForecastForDate?.ToString("MM-dd") ?? "-") · @(i.ForecastStatus ?? "-")</div>
+                    <div class="text-muted">@(i.ForecastForDate?.ToString("MM-dd") ?? "-") · @(i.ForecastSource ?? i.ForecastStatus ?? "-")</div>
+                    @if (i.AvgAiAccuracyPct.HasValue || i.AvgAtrAccuracyPct.HasValue)
+                    {
+                        <div class="text-muted">AI @(i.AvgAiAccuracyPct?.ToString("N0") ?? "-") / ATR @(i.AvgAtrAccuracyPct?.ToString("N0") ?? "-")</div>
+                    }
                 }
                 else
                 {

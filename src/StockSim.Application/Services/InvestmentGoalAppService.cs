@@ -33,6 +33,21 @@ public class InvestmentGoalAppService
         _logger = logger;
     }
 
+    /// <summary>删除投资目标及其入选股、进度记录。</summary>
+    public async Task<(bool Ok, string Message)> DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        var goal = await _db.InvestmentGoals.FirstOrDefaultAsync(g => g.Id == id, ct);
+        if (goal is null) return (false, "目标不存在");
+
+        var stocks = await _db.InvestmentGoalStocks.Where(s => s.InvestmentGoalId == id).ToListAsync(ct);
+        var progress = await _db.GoalProgressDailies.Where(p => p.InvestmentGoalId == id).ToListAsync(ct);
+        _db.InvestmentGoalStocks.RemoveRange(stocks);
+        _db.GoalProgressDailies.RemoveRange(progress);
+        _db.InvestmentGoals.Remove(goal);
+        await _db.SaveChangesAsync(ct);
+        return (true, "已删除投资目标");
+    }
+
     public async Task<IReadOnlyList<InvestmentGoalDto>> ListAsync(CancellationToken ct = default)
     {
         var goals = await _db.InvestmentGoals

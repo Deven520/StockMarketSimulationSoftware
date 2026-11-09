@@ -128,6 +128,19 @@ public sealed class AiQueueAppService
             x.CreationTime, x.StartedAt, x.CompletedAt, x.WorkerId);
     }
 
+    /// <summary>删除队列项；Running 中不可删，Pending 标记取消后删除。</summary>
+    public async Task<(bool Ok, string Message)> DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        var item = await _db.AiQueueItems.FirstOrDefaultAsync(i => i.Id == id, ct);
+        if (item is null) return (false, "队列项不存在");
+        if (item.Status == AiQueueItemStatus.Running)
+            return (false, "执行中任务不可删除，请稍后再试");
+
+        _db.AiQueueItems.Remove(item);
+        await _db.SaveChangesAsync(ct);
+        return (true, "已删除队列项");
+    }
+
     /// <summary>抢占并执行下一条 Pending；无任务返回 false。</summary>
     public async Task<bool> TryProcessNextAsync(CancellationToken ct = default)
     {

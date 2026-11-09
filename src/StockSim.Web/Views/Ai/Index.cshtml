@@ -79,7 +79,14 @@
                     <td>@g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.ThemePreference</td>
                     <td>@g.Status</td>
                     <td>@(g.LatestAchievementRate.HasValue ? $"{g.LatestAchievementRate:N1}%" : "-")</td>
-                    <td><a asp-action="GoalDetails" asp-route-id="@g.Id">详情</a></td>
+                    <td class="text-nowrap">
+                        <a asp-action="GoalDetails" asp-route-id="@g.Id">详情</a>
+                        <form asp-action="DeleteGoal" method="post" class="d-inline"
+                              onsubmit="return confirm('确认删除该投资目标？');">
+                            <input type="hidden" name="id" value="@g.Id" />
+                            <button class="btn btn-sm btn-outline-danger ms-1">删除</button>
+                        </form>
+                    </td>
                 </tr>
             }
             </tbody>
@@ -108,7 +115,17 @@
             <td><span class="badge bg-secondary">@j.Status</span></td>
             <td style="max-width:320px;"><div class="text-truncate" title="@j.Prompt">@j.Prompt</div></td>
             <td>@j.SuggestionCount</td>
-            <td><a class="btn btn-sm btn-outline-primary" asp-action="Details" asp-route-id="@j.Id">查阅</a></td>
+            <td class="text-nowrap">
+                <a class="btn btn-sm btn-outline-primary" asp-action="Details" asp-route-id="@j.Id">查阅</a>
+                @if (j.Status != AiJobStatus.Running)
+                {
+                    <form asp-action="DeleteJob" method="post" class="d-inline"
+                          onsubmit="return confirm('确认删除该 AI 任务？');">
+                        <input type="hidden" name="id" value="@j.Id" />
+                        <button class="btn btn-sm btn-outline-danger">删除</button>
+                    </form>
+                }
+            </td>
         </tr>
     }
     </tbody>

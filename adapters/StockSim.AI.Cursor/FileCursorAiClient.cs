@@ -229,7 +229,9 @@ public sealed class FileCursorAiClient : ICursorAiClient
                     predictedHigh,
                     predictedLow,
                     asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-                    rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）"
+                    rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）",
+                    source = "placeholder",
+                    countsTowardAccuracy = false
                 },
                 feeModel = "AShareDefault"
             },
@@ -239,7 +241,9 @@ public sealed class FileCursorAiClient : ICursorAiClient
                 predictedHigh,
                 predictedLow,
                 asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-                rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）"
+                rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）",
+                source = "placeholder",
+                countsTowardAccuracy = false
             },
             changeNote = $"AI占位建议：{prompt}",
             risk = "须人工确认后方可生效，不得绕过风控硬约束"

@@ -74,4 +74,104 @@ public class PriceForecastMetricsTests
         Assert.Equal(new DateTime(2026, 11, 10), PriceForecastMetrics.ResolveForecastTargetDate(afterClose));
         Assert.False(PriceForecastMetrics.IsSameDayForecastWindow(afterClose));
     }
+
+    [Fact]
+    public void IsPlaceholderForecast_Detects_Source_And_Rationale()
+    {
+        Assert.True(PriceForecastMetrics.IsPlaceholderForecast(new ForecastPolicy
+        {
+            PredictedHigh = 10,
+            PredictedLow = 9,
+            Source = "placeholder",
+            CountsTowardAccuracy = false
+        }));
+        Assert.True(PriceForecastMetrics.IsPlaceholderForecast(new ForecastPolicy
+        {
+            PredictedHigh = 10,
+            PredictedLow = 9,
+            Rationale = "占位：按参考价±1.5%"
+        }));
+        Assert.False(PriceForecastMetrics.IsPlaceholderForecast(new ForecastPolicy
+        {
+            PredictedHigh = 10,
+            PredictedLow = 9,
+            Source = "ai",
+            CountsTowardAccuracy = true
+        }));
+    }
+
+    [Fact]
+    public void TryBuildAtrBaseline_Uses_Recent_Bars()
+    {
+        var bars = new List<DailyBar>();
+        var d = new DateTime(2026, 10, 1);
+        var close = 100m;
+        for (var i = 0; i < 20; i++)
+        {
+            bars.Add(new DailyBar
+            {
+                Date = d.AddDays(i),
+                Open = close,
+                High = close + 2m,
+                Low = close - 2m,
+                Close = close + 0.5m,
+                Volume = 1000,
+                Amount = 100000
+            });
+            close += 0.5m;
+        }
+
+        var target = new DateTime(2026, 10, 25);
+        var fc = PriceForecastMetrics.TryBuildAtrBaseline(bars, target);
+        Assert.NotNull(fc);
+        Assert.True(fc!.PredictedHigh > fc.PredictedLow);
+        Assert.Equal("atr_baseline", fc.Source);
+        Assert.True(fc.CountsTowardAccuracy);
+    }
+
+    [Fact]
+    public void ApplyBiasCalibration_Corrects_Systematic_Overestimate()
+    {
+        var raw = new ForecastPolicy
+        {
+            ForDate = "2026-11-10",
+            PredictedHigh = 110m,
+            PredictedLow = 100m,
+            Source = "ai"
+        };
+        // 历史系统性偏高 10%
+        var calibrated = PriceForecastMetrics.ApplyBiasCalibration(raw, 10m, 10m);
+        Assert.Equal("calibrated_ai", calibrated.Source);
+        Assert.True(calibrated.PredictedHigh < 110m);
+        Assert.True(calibrated.PredictedLow < 100m);
+    }
+
+    [Fact]
+    public void PassesForecastSoftBand_Blocks_Sell_Too_Far_From_High()
+    {
+        var fc = new ForecastPolicy
+        {
+            ForDate = "2026-11-09",
+            PredictedHigh = 110m,
+            PredictedLow = 100m,
+            Source = "ai",
+            CountsTowardAccuracy = true
+        };
+        var now = new DateTime(2026, 11, 9, 10, 0, 0);
+        Assert.False(PriceForecastMetrics.PassesForecastSoftBand(
+            fc, lastPrice: 101m, now, forSell: true, 0.35m, out var reason));
+        Assert.Contains("高抛区", reason);
+        Assert.True(PriceForecastMetrics.PassesForecastSoftBand(
+            fc, lastPrice: 108m, now, forSell: true, 0.35m, out _));
+        Assert.True(PriceForecastMetrics.PassesForecastSoftBand(
+            fc, lastPrice: 101m, now, forSell: false, 0.35m, out _));
+    }
+
+    [Fact]
+    public void ResolveAggressionScale_Deweights_When_Accuracy_Low()
+    {
+        Assert.Equal(1m, PriceForecastMetrics.ResolveAggressionScale(80m));
+        Assert.True(PriceForecastMetrics.ResolveAggressionScale(0m) < 1m);
+        Assert.Equal(1m, PriceForecastMetrics.ResolveAggressionScale(null));
+    }
 }
