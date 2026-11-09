@@ -38,7 +38,8 @@ public sealed class LiveOrReplayMarketDataProvider : IMarketDataProvider
             if (detail is not null)
             {
                 var light = await detail.GetLightQuoteAsync(symbol, null, cancellationToken);
-                if (light is not null && light.Last > 0)
+                // 严禁用模拟报价成交；东财失败时交给 Replay（通常无该股则跳过）
+                if (light is not null && light.Last > 0 && !light.IsSimulated)
                 {
                     return new QuoteTick
                     {
@@ -53,6 +54,13 @@ public sealed class LiveOrReplayMarketDataProvider : IMarketDataProvider
                         IsLimitDown = light.ChangePercent <= -9.5m,
                         Timestamp = light.AsOf == default ? DateTime.Now : light.AsOf
                     };
+                }
+
+                if (light?.IsSimulated == true)
+                {
+                    _logger.LogWarning(
+                        "Skip simulated light quote for {Symbol} @ {Last} (not tradable)",
+                        symbol, light.Last);
                 }
             }
         }

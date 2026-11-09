@@ -50,4 +50,12 @@ public class StrategiesController : Controller
         await _strategies.SetEnabledAsync(id, enabled, ct);
         return RedirectToAction(nameof(Index));
     }
+
+    [HttpPost]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    {
+        var r = await _strategies.DeleteAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        return RedirectToAction(nameof(Index));
+    }
 }

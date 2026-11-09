@@ -40,11 +40,17 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
         try
         {
             var quote = await FetchQuoteAsync(ToSecId(symbol), ct);
-            if (quote is null) return await _fallback.GetLightQuoteAsync(symbol, name, ct);
+            // 轻量报价供 Worker 下单：失败时不要回退模拟价（假价会导致错误成交）
+            if (quote is null) return null;
 
-            var last = quote.Last;
+            // 未开市/停牌时东财最新价常为 "-"→0，列表应展示昨收，避免显示 0.00
             var preClose = quote.PreClose;
-            var changePct = preClose == 0 ? 0 : (last - preClose) / preClose * 100m;
+            var usedPreClose = quote.Last <= 0 && preClose > 0;
+            var last = EffectiveLast(quote.Last, preClose);
+            if (last <= 0) return null;
+            var changePct = usedPreClose || preClose <= 0
+                ? 0
+                : (last - preClose) / preClose * 100m;
             return new LightStockQuote
             {
                 Symbol = symbol,
@@ -54,13 +60,14 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
                 PeTtm = quote.Fundamentals.PeTtm,
                 Pb = quote.Fundamentals.Pb,
                 Industry = quote.Fundamentals.Industry,
-                AsOf = DateTime.Now
+                AsOf = DateTime.Now,
+                IsSimulated = false
             };
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Light quote failed for {Symbol}", symbol);
-            return await _fallback.GetLightQuoteAsync(symbol, name, ct);
+            return null;
         }
     }
 
@@ -105,10 +112,11 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
         try
         {
             var secids = string.Join(",", symbols.Select(ToSecId));
+            // f2 最新价、f3 涨跌幅、f18 昨收；未开市 f2 常为 "-"
             var url =
                 "https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2" +
                 $"&secids={Uri.EscapeDataString(secids)}" +
-                "&fields=f12,f14,f2,f3,f162,f167";
+                "&fields=f12,f14,f2,f3,f18,f162,f167";
 
             using var doc = await GetJsonAsync(url, ct);
             var data = doc?.RootElement.GetPropertyOrNull("data");
@@ -124,8 +132,12 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
                 var symbol = NormalizeSymbol(code);
                 if (symbol.Length != 6) continue;
                 var name = GetString(row, "f14") ?? symbol;
-                var last = GetDecimal(row, "f2");
-                var changePct = GetDecimal(row, "f3");
+                var rawLast = GetDecimal(row, "f2");
+                var preClose = GetDecimal(row, "f18");
+                var last = EffectiveLast(rawLast, preClose);
+                var changePct = rawLast <= 0 && preClose > 0
+                    ? 0
+                    : GetDecimal(row, "f3");
                 list.Add(new LightStockQuote
                 {
                     Symbol = symbol,
@@ -187,17 +199,24 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
             var lastMinute = minutes.Count > 0 ? minutes[^1] : null;
             var displayName = quote?.Name ?? name ?? symbol;
 
-            var last = quote?.Last
-                       ?? lastMinute?.Close
-                       ?? lastDaily?.Close
+            var quoteLast = quote is not null && quote.Last > 0 ? quote.Last : (decimal?)null;
+            var preClose = PositiveOrNull(quote?.PreClose)
+                           ?? (daily.Count > 1 ? daily[^2].Close : (decimal?)null)
+                           ?? lastDaily?.Close
+                           ?? 0;
+            // 未开市 quote.Last=0 时不能短路，需回退昨收/日K/分时
+            var last = quoteLast
+                       ?? PositiveOrNull(lastMinute?.Close)
+                       ?? PositiveOrNull(lastDaily?.Close)
+                       ?? PositiveOrNull(preClose)
                        ?? 0;
-            var open = quote?.Open ?? lastDaily?.Open ?? last;
-            var high = quote?.High ?? lastDaily?.High ?? last;
-            var low = quote?.Low ?? lastDaily?.Low ?? last;
-            var preClose = quote?.PreClose
-                           ?? (daily.Count > 1 ? daily[^2].Close : lastDaily?.Open ?? last);
+            var open = PositiveOrNull(quote?.Open) ?? lastDaily?.Open ?? last;
+            var high = PositiveOrNull(quote?.High) ?? lastDaily?.High ?? last;
+            var low = PositiveOrNull(quote?.Low) ?? lastDaily?.Low ?? last;
             var change = last - preClose;
-            var changePct = preClose == 0 ? 0 : change / preClose * 100m;
+            var changePct = preClose == 0 || (quoteLast is null && quote?.Last <= 0)
+                ? 0
+                : change / preClose * 100m;
 
             var board = new StockQuoteBoard
             {
@@ -497,13 +516,31 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
         return p.ValueKind switch
         {
             JsonValueKind.Number => p.TryGetDecimal(out var d) ? d : (decimal)p.GetDouble(),
-            JsonValueKind.String => ParseDec(p.GetString() ?? "0"),
+            // 东财未开市常用 "-" 表示无最新价
+            JsonValueKind.String => IsEastMoneyBlank(p.GetString()) ? 0 : ParseDec(p.GetString() ?? "0"),
             _ => 0
         };
     }
 
-    private static string? GetString(JsonElement el, string name) =>
-        el.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+    private static bool IsEastMoneyBlank(string? s) =>
+        string.IsNullOrWhiteSpace(s) || s == "-" || s == "--";
+
+    /// <summary>最新价无效时用昨收展示，避免股票池出现 0.00。</summary>
+    private static decimal EffectiveLast(decimal last, decimal preClose) =>
+        last > 0 ? last : (preClose > 0 ? preClose : 0);
+
+    private static decimal? PositiveOrNull(decimal? v) => v is > 0 ? v : null;
+
+    private static string? GetString(JsonElement el, string name)
+    {
+        if (!el.TryGetProperty(name, out var p)) return null;
+        return p.ValueKind switch
+        {
+            JsonValueKind.String => p.GetString(),
+            JsonValueKind.Number => p.ToString(),
+            _ => null
+        };
+    }
 
     private static decimal? NullIfZero(decimal v) => v == 0 ? null : v;
     private static decimal? ToYi(decimal v) => v == 0 ? null : Round2(v / 100000000m);

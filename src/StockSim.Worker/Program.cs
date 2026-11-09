@@ -19,11 +19,14 @@ var bridgeDir = Path.Combine(repoRoot, "adapters", "cursor-agent-bridge");
 if (Directory.Exists(bridgeDir))
     builder.Configuration["AI:Cursor:BridgeDirectory"] = bridgeDir;
 
-// 默认与 Web 开发库对齐：优先使用仓库根目录下的 stocksim.db
-if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("StockSim"))
-    || builder.Configuration.GetConnectionString("StockSim")!.Contains("StockSim.Web", StringComparison.OrdinalIgnoreCase))
+// 默认与 Web 开发库对齐：使用同一份 stocksim.db（须带 Data Source= 前缀）
+var configuredCs = builder.Configuration.GetConnectionString("StockSim");
+if (string.IsNullOrWhiteSpace(configuredCs)
+    || configuredCs.Contains("StockSim.Web", StringComparison.OrdinalIgnoreCase)
+    || !configuredCs.Contains('=', StringComparison.Ordinal))
 {
-    builder.Configuration["ConnectionStrings:StockSim"] = Path.Combine(repoRoot, "src", "StockSim.Web", "stocksim.db");
+    var dbPath = Path.Combine(repoRoot, "src", "StockSim.Web", "stocksim.db");
+    builder.Configuration["ConnectionStrings:StockSim"] = "Data Source=" + dbPath;
 }
 
 builder.Services.AddStockSimInfrastructure(builder.Configuration);

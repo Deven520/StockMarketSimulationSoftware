@@ -1,11 +1,11 @@
-﻿{
+{
     "AI":  {
                "Cursor":  {
                               "Enabled":  true,
                               "Model":  "composer-2.5",
                               "TimeoutSeconds":  180,
-                              "FallbackToPlaceholder":  false,
-                              "NodeExecutable":  "D:\\Projects\\StockMarketWeb\\StockMarketSimulationSoftware\\tools\\node\\node.exe",
+                              "FallbackToPlaceholder":  true,
+                              "NodeExecutable":  "D:\\Projects\\StocksMarketWeb\\StockMarketSimulationSoftware\\StockMarketSimulationSoftware-main\\tools\\node\\node.exe",
                               "BridgeDirectory":  "adapters/cursor-agent-bridge",
                               "ApiKey":  ""
                           }

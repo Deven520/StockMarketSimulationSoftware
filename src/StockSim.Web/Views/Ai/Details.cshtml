@@ -32,6 +32,7 @@
 {
     <div class="alert alert-light border">
         <strong>投资目标：</strong>
+        @(goalDetail.Goal.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing ? "趋势股" : "做T股") /
         预期 @goalDetail.Goal.ExpectedReturnPct% /
         @goalDetail.Goal.HorizonDays 天 /
         题材「@goalDetail.Goal.ThemePreference」

@@ -3,6 +3,10 @@
     var pools = (IReadOnlyList<StockSim.Application.Dtos.StockPoolDto>)ViewBag.Pools;
 }
 <h2>策略中心</h2>
+@if (TempData["Msg"] is string msg)
+{
+    <div class="alert alert-info py-2">@msg</div>
+}
 <form asp-action="Create" method="post" class="row g-2 mb-3">
     <div class="col-auto"><input name="name" class="form-control" placeholder="策略名" required /></div>
     <div class="col-auto"><input name="description" class="form-control" placeholder="描述" /></div>
@@ -12,13 +16,19 @@
 {
     <div class="card mb-3 shadow-sm">
         <div class="card-body">
-            <div class="d-flex justify-content-between">
+            <div class="d-flex justify-content-between align-items-start gap-2">
                 <h5>@s.Name <small class="text-muted">v@s.CurrentVersion</small></h5>
-                <form asp-action="Toggle" method="post">
-                    <input type="hidden" name="id" value="@s.Id" />
-                    <input type="hidden" name="enabled" value="@(!s.IsEnabled)" />
-                    <button class="btn btn-sm @(s.IsEnabled ? "btn-success" : "btn-secondary")">@(s.IsEnabled ? "已启用" : "已停用")</button>
-                </form>
+                <div class="d-flex gap-2">
+                    <form asp-action="Toggle" method="post">
+                        <input type="hidden" name="id" value="@s.Id" />
+                        <input type="hidden" name="enabled" value="@(!s.IsEnabled)" />
+                        <button class="btn btn-sm @(s.IsEnabled ? "btn-success" : "btn-secondary")">@(s.IsEnabled ? "已启用" : "已停用")</button>
+                    </form>
+                    <form asp-action="Delete" method="post" onsubmit="return confirm('确认删除策略 @s.Name？将解除绑定。');">
+                        <input type="hidden" name="id" value="@s.Id" />
+                        <button class="btn btn-sm btn-outline-danger">删除</button>
+                    </form>
+                </div>
             </div>
             <p>@s.Description</p>
             <form asp-action="UpdateParams" method="post" class="mb-2">

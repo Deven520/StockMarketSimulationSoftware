@@ -4,7 +4,7 @@ using StockSim.Domain.Enums;
 namespace StockSim.Domain.Entities;
 
 /// <summary>
-/// AI 预测的次日最高/最低价及对账准确率历史。每条记录绑定「预测股票」。
+/// 最高/最低价预测及对账准确率历史。每条记录绑定「预测股票」与来源。
 /// </summary>
 public class PriceRangeForecast : EntityBase
 {
@@ -40,6 +40,12 @@ public class PriceRangeForecast : EntityBase
 
     public DateTime? EvaluatedAt { get; set; }
     public ForecastStatus Status { get; set; } = ForecastStatus.Pending;
+
+    /// <summary>预测来源（AI / ATR 基线 / 占位等）。</summary>
+    public ForecastSource Source { get; set; } = ForecastSource.Ai;
+
+    /// <summary>是否计入准确率榜与平均值（占位预测为 false）。</summary>
+    public bool CountsTowardAccuracy { get; set; } = true;
 
     public Guid? StrategyDefinitionId { get; set; }
     public Guid? StrategyVersionId { get; set; }

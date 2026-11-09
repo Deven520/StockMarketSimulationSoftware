@@ -39,12 +39,13 @@ public class AiController : Controller
         decimal expectedReturnPct,
         int horizonDays,
         string themePreference,
-        CancellationToken ct)
+        StockTradeStyle tradeStyle = StockTradeStyle.IntradayT,
+        CancellationToken ct = default)
     {
         try
         {
             var (goal, job, queueId) = await _goals.CreateGoalAndPickAsync(
-                new CreateInvestmentGoalRequest(expectedReturnPct, horizonDays, themePreference), ct);
+                new CreateInvestmentGoalRequest(expectedReturnPct, horizonDays, themePreference, tradeStyle), ct);
             TempData["Msg"] = $"已提交 AI 队列（任务 {queueId.ToString()[..8]}…）。完成后可在选股结果中勾选入库。";
             TempData["MsgType"] = "success";
             return RedirectToAction(nameof(Queue), new { highlight = queueId });
@@ -167,5 +168,32 @@ public class AiController : Controller
         var r = await _ai.ReviewSuggestionAsync(jobId, suggestionId, accept, pool, null, ct: ct);
         TempData["Msg"] = r.Message;
         return RedirectToAction(nameof(Details), new { id = jobId, goalId });
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> DeleteQueueItem(Guid id, CancellationToken ct)
+    {
+        var r = await _queue.DeleteAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        TempData["MsgType"] = r.Ok ? "success" : "danger";
+        return RedirectToAction(nameof(Queue));
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> DeleteGoal(Guid id, CancellationToken ct)
+    {
+        var r = await _goals.DeleteAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        TempData["MsgType"] = r.Ok ? "success" : "danger";
+        return RedirectToAction(nameof(Goals));
+    }
+
+    [HttpPost]
+    public async Task<IActionResult> DeleteJob(Guid id, CancellationToken ct)
+    {
+        var r = await _ai.DeleteJobAsync(id, ct);
+        TempData["Msg"] = r.Message;
+        TempData["MsgType"] = r.Ok ? "success" : "danger";
+        return RedirectToAction(nameof(Index));
     }
 }

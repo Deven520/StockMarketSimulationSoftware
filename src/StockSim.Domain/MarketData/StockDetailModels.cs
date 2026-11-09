@@ -88,6 +88,9 @@ public sealed class LightStockQuote
     public decimal? Pb { get; init; }
     public string? Industry { get; init; }
     public DateTime AsOf { get; init; }
+
+    /// <summary>模拟/演示报价。Worker 交易路径必须忽略，避免按假价成交。</summary>
+    public bool IsSimulated { get; init; }
 }
 
 /// <summary>个股详情行情接口（可替换为真实行情源）。</summary>

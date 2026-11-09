@@ -120,4 +120,37 @@ public class TradingAppService
             .Take(500)
             .ToListAsync(ct);
     }
+
+    /// <summary>删除成交记录（不回滚持仓/资金，仅清理明细）。</summary>
+    public async Task<(bool Ok, string Message)> DeleteTradeAsync(Guid id, CancellationToken ct = default)
+    {
+        var trade = await _db.Trades.FirstOrDefaultAsync(t => t.Id == id, ct);
+        if (trade is null) return (false, "成交不存在");
+        _db.Trades.Remove(trade);
+        await _db.SaveChangesAsync(ct);
+        return (true, $"已删除成交 {trade.Symbol}");
+    }
+
+    /// <summary>清空持仓：数量归零；若池内有该成分则 AvailableCash 重置为 InitialCash。</summary>
+    public async Task<(bool Ok, string Message)> ClearPositionAsync(Guid id, CancellationToken ct = default)
+    {
+        var position = await _db.Positions.FirstOrDefaultAsync(p => p.Id == id, ct);
+        if (position is null) return (false, "持仓不存在");
+
+        var symbol = position.Symbol;
+        position.Quantity = 0;
+        position.BaseQuantity = 0;
+        position.SellableQuantity = 0;
+        position.AvgCost = 0;
+
+        var item = await _db.StockPoolItems.FirstOrDefaultAsync(i => i.Symbol == symbol, ct);
+        if (item is not null)
+        {
+            item.AvailableCash = item.InitialCash > 0 ? item.InitialCash : StockPoolAppService.DefaultPerStockCash;
+            item.LastModificationTime = DateTime.UtcNow;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        return (true, $"已清空持仓 {symbol}");
+    }
 }

@@ -3,19 +3,46 @@
     var history = (IReadOnlyList<StockSim.Application.Dtos.DailyPnLDto>)ViewBag.History;
 }
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2 class="mb-0">监控总览</h2>
+    <div>
+        <h2 class="mb-0">监控总览</h2>
+        @if (!string.IsNullOrWhiteSpace(Model.PoolName))
+        {
+            <div class="text-muted small mt-1">
+                当前股票池：@Model.PoolName · 成分 @Model.PoolItemCount 只 · 初始资金合计 @Model.PoolInitialCash.ToString("N0")
+            </div>
+        }
+    </div>
     <span class="badge bg-warning text-dark">@Model.Disclaimer</span>
 </div>
 <div class="row g-3 mb-4">
-    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">现金</div><div class="fs-4">@Model.Cash.ToString("N2")</div></div></div></div>
-    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">持仓成本市值</div><div class="fs-4">@Model.PositionMarketValue.ToString("N2")</div></div></div></div>
-    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">总资产</div><div class="fs-4">@Model.TotalAssets.ToString("N2")</div></div></div></div>
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">池内可用现金</div><div class="fs-4">@Model.Cash.ToString("N2")</div></div></div></div>
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">池内持仓成本</div><div class="fs-4">@Model.PositionMarketValue.ToString("N2")</div></div></div></div>
+    <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">池内总资产</div><div class="fs-4">@Model.TotalAssets.ToString("N2")</div></div></div></div>
     <div class="col-md-3"><div class="card shadow-sm"><div class="card-body"><div class="text-muted">今日盈亏 / 成交</div><div class="fs-4">@Model.TodayPnL.ToString("N2") / @Model.TodayTradeCount</div></div></div></div>
 </div>
 <p class="text-muted">交易模式：@Model.TradingMode</p>
-<h4>近30日盈亏</h4>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+            <div>
+                <h4 class="mb-0">个股收益曲线</h4>
+                <div class="text-muted small">Y=累计已实现收益率%（相对每股初始资金）· X=交易日 · 悬停查看明细</div>
+            </div>
+            <div class="btn-group btn-group-sm" role="group" aria-label="收益曲线筛选">
+                <button type="button" class="btn btn-outline-secondary active" data-return-filter="all">全部</button>
+                <button type="button" class="btn btn-outline-secondary" data-return-filter="IntradayT">做T</button>
+                <button type="button" class="btn btn-outline-secondary" data-return-filter="TrendSwing">趋势</button>
+            </div>
+        </div>
+        <div id="poolReturnChart" style="height: 420px;"></div>
+        <div id="poolReturnChartStatus" class="text-muted small mt-1">加载中…</div>
+    </div>
+</div>
+
+<h4>近30日盈亏（当前池）</h4>
 <table class="table table-sm table-striped">
-    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th></tr></thead>
+    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th><th></th></tr></thead>
     <tbody>
     @foreach (var x in history)
     {
@@ -26,7 +53,156 @@
             <td>@x.RealizedPnL.ToString("N2")</td>
             <td>@x.Fees.ToString("N2")</td>
             <td>@((x.WinRate * 100).ToString("N1"))%</td>
+            <td>
+                <form asp-controller="Trades" asp-action="DeletePnL" method="post" class="d-inline"
+                      onsubmit="return confirm('确认删除该盈亏记录？');">
+                    <input type="hidden" name="id" value="@x.Id" />
+                    <input type="hidden" name="returnUrl" value="@Url.Action("Index", "Dashboard")" />
+                    <button class="btn btn-sm btn-outline-danger">删除</button>
+                </form>
+            </td>
         </tr>
     }
     </tbody>
 </table>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script>
+(() => {
+  const poolId = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.PoolId));
+  const chartEl = document.getElementById('poolReturnChart');
+  const statusEl = document.getElementById('poolReturnChartStatus');
+  if (!chartEl || typeof echarts === 'undefined') return;
+
+  const chart = echarts.init(chartEl);
+  let rawPayload = null;
+  let styleFilter = 'all';
+
+  function fmtPct(v) {
+    if (v == null || Number.isNaN(Number(v))) return '-';
+    const n = Number(v);
+    return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+  }
+  function fmtNum(v, d) {
+    if (v == null || Number.isNaN(Number(v))) return '-';
+    return Number(v).toLocaleString('zh-CN', { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
+
+  function buildOption(payload) {
+    const dates = payload.dates || [];
+    const seriesSrc = (payload.series || []).filter(s =>
+      styleFilter === 'all' || s.tradeStyle === styleFilter);
+
+    const series = seriesSrc.map(s => {
+      const byDate = Object.fromEntries((s.points || []).map(p => [p.date, p]));
+      return {
+        name: `${s.name}(${s.symbol})`,
+        type: 'line',
+        smooth: true,
+        showSymbol: true,
+        symbolSize: 7,
+        connectNulls: true,
+        data: dates.map(d => {
+          const p = byDate[d];
+          if (!p || p.returnPct == null) return null;
+          return {
+            value: Number(p.returnPct),
+            point: p,
+            meta: s
+          };
+        })
+      };
+    });
+
+    return {
+      color: ['#e74c3c', '#3498db', '#2ecc71', '#9b59b6', '#f39c12', '#1abc9c', '#e67e22', '#34495e'],
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross' },
+        formatter: (params) => {
+          if (!params || !params.length) return '';
+          const date = params[0].axisValue;
+          let html = `<div style="font-weight:600;margin-bottom:6px;">${date}</div>`;
+          params.forEach(item => {
+            const raw = item.data;
+            if (!raw || raw.value == null) return;
+            const p = raw.point || {};
+            const m = raw.meta || {};
+            const styleLabel = m.tradeStyle === 'TrendSwing' ? '趋势' : '做T';
+            html += `<div style="margin:6px 0 2px;">${item.marker}<b>${item.seriesName}</b> · ${styleLabel}</div>`;
+            html += `<div style="padding-left:16px;line-height:1.5;">`;
+            html += `收益率：<b>${fmtPct(p.returnPct)}</b><br/>`;
+            html += `累计盈亏：${fmtNum(p.cumRealizedPnL, 2)}<br/>`;
+            html += `当日盈亏：${fmtNum(p.dayRealizedPnL, 2)} · 费用 ${fmtNum(p.dayFees, 2)}<br/>`;
+            html += `成交 ${p.tradeCount ?? 0} 笔 · 胜率 ${((p.winRate || 0) * 100).toFixed(1)}%<br/>`;
+            html += `初始资金：${fmtNum(m.initialCash, 0)}`;
+            if (p.availableCash != null || p.positionCost != null) {
+              html += `<br/>可用现金：${fmtNum(p.availableCash, 2)} · 持仓成本：${fmtNum(p.positionCost, 2)}`;
+            }
+            html += `</div>`;
+          });
+          return html;
+        }
+      },
+      legend: {
+        type: 'scroll',
+        top: 0,
+        data: series.map(s => s.name)
+      },
+      grid: { left: 56, right: 24, top: 48, bottom: 48 },
+      xAxis: {
+        type: 'category',
+        name: '交易日',
+        boundaryGap: false,
+        data: dates
+      },
+      yAxis: {
+        type: 'value',
+        name: '收益率%',
+        axisLabel: {
+          formatter: (v) => Number(v).toFixed(1) + '%'
+        },
+        splitLine: { lineStyle: { type: 'dashed' } }
+      },
+      series
+    };
+  }
+
+  function render() {
+    if (!rawPayload) return;
+    const opt = buildOption(rawPayload);
+    chart.setOption(opt, true);
+    const n = (rawPayload.series || []).filter(s =>
+      styleFilter === 'all' || s.tradeStyle === styleFilter).length;
+    statusEl.textContent = n === 0
+      ? '暂无符合筛选的个股序列'
+      : `共 ${n} 条曲线 · ${(rawPayload.dates || []).length} 个交易日`;
+  }
+
+  async function load() {
+    try {
+      const qs = new URLSearchParams();
+      if (poolId) qs.set('poolId', poolId);
+      const res = await fetch(`/Dashboard/ReturnSeries?${qs.toString()}`);
+      if (!res.ok) throw new Error('http ' + res.status);
+      rawPayload = await res.json();
+      render();
+    } catch (e) {
+      statusEl.textContent = '收益曲线加载失败';
+      statusEl.classList.add('text-danger');
+    }
+  }
+
+  document.querySelectorAll('[data-return-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      styleFilter = btn.getAttribute('data-return-filter') || 'all';
+      document.querySelectorAll('[data-return-filter]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      render();
+    });
+  });
+
+  window.addEventListener('resize', () => chart.resize());
+  load();
+})();
+</script>

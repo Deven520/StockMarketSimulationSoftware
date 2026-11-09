@@ -15,6 +15,9 @@ public class InvestmentGoal : AuditedEntity
     /// <summary>题材/风格偏好。</summary>
     public string ThemePreference { get; set; } = string.Empty;
 
+    /// <summary>选股类型：做T股 / 趋势股。</summary>
+    public StockTradeStyle TradeStyle { get; set; } = StockTradeStyle.IntradayT;
+
     /// <summary>由目标经 AI 生成的选股提示词。</summary>
     public string? GeneratedPrompt { get; set; }
 

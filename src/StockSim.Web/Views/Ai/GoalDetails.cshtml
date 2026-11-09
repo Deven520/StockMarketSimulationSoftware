@@ -5,7 +5,7 @@
 <div class="mb-3 d-flex justify-content-between align-items-start flex-wrap gap-2">
     <div>
         <h2 class="mb-1">目标详情</h2>
-        <div class="text-muted">@g.ThemePreference · 预期 @g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.Status</div>
+        <div class="text-muted">@(g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing ? "趋势股" : "做T股") · @g.ThemePreference · 预期 @g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.Status</div>
     </div>
     <div class="d-flex gap-2">
         <form asp-action="RefreshGoalProgress" method="post" class="d-inline">

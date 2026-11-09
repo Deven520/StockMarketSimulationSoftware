@@ -55,18 +55,55 @@ public class StockDetailAppService
             .Where(t => symbols.Contains(t.Symbol) && t.TradeDate == today)
             .ToListAsync(ct);
 
-        // 下一开盘日预测：与策略刷新同一规则（开市前=当日，否则下一交易日）
+        // 收盘前展示/刷新当日预测；收盘后切下一交易日。兼容旧数据：当日缺失时回退到下一交易日预测。
         var forecastTarget = PriceForecastMetrics.ResolveForecastTargetDate(now);
+        var fallbackTarget = PriceForecastMetrics.IsSameDayForecastWindow(now)
+            ? PriceForecastMetrics.NextTradingDay(now.Date)
+            : (DateTime?)null;
+        var forecastDates = fallbackTarget is null
+            ? new[] { forecastTarget.Date }
+            : new[] { forecastTarget.Date, fallbackTarget.Value.Date };
         var forecastRows = symbols.Count == 0
             ? new List<PriceRangeForecast>()
             : await _db.PriceRangeForecasts
-                .Where(f => symbols.Contains(f.Symbol) && f.ForecastForDate == forecastTarget.Date)
+                .Where(f => symbols.Contains(f.Symbol) && forecastDates.Contains(f.ForecastForDate))
                 .ToListAsync(ct);
+        // 列表优先展示 AI/校准预测，其次 ATR 基线；占位不展示
         var forecastBySymbol = forecastRows
+            .Where(f => f.Source != ForecastSource.Placeholder)
             .GroupBy(f => f.Symbol, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 g => g.Key,
-                g => g.OrderByDescending(x => x.PredictedAt).First(),
+                g => g
+                    .OrderBy(x => x.ForecastForDate.Date == forecastTarget.Date ? 0 : 1)
+                    .ThenBy(x => SourceDisplayRank(x.Source))
+                    .ThenByDescending(x => x.PredictedAt)
+                    .First(),
+                StringComparer.OrdinalIgnoreCase);
+
+        var lookbackFrom = now.Date.AddDays(-PriceForecastMetrics.EvaluationLookbackDays);
+        var accuracyRows = symbols.Count == 0
+            ? new List<PriceRangeForecast>()
+            : await _db.PriceRangeForecasts
+                .Where(f => symbols.Contains(f.Symbol)
+                            && f.Status == ForecastStatus.Evaluated
+                            && f.CountsTowardAccuracy
+                            && f.CombinedAccuracyPct != null
+                            && f.ForecastForDate >= lookbackFrom)
+                .ToListAsync(ct);
+        var aiAvgBySymbol = accuracyRows
+            .Where(f => f.Source is ForecastSource.Ai or ForecastSource.CalibratedAi)
+            .GroupBy(f => f.Symbol, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => Math.Round(g.Average(x => x.CombinedAccuracyPct!.Value), 1),
+                StringComparer.OrdinalIgnoreCase);
+        var atrAvgBySymbol = accuracyRows
+            .Where(f => f.Source == ForecastSource.AtrBaseline)
+            .GroupBy(f => f.Symbol, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => Math.Round(g.Average(x => x.CombinedAccuracyPct!.Value), 1),
                 StringComparer.OrdinalIgnoreCase);
 
         var boundSymbolSet = items
@@ -100,7 +137,8 @@ public class StockDetailAppService
                 && activeStrategyIds.Contains(b.StrategyDefinitionId));
             var poolHasStrategy = !boundSymbolSet.Contains(item.Symbol)
                                   && bindings.Any(b => b.StockPoolId == poolId && string.IsNullOrEmpty(b.Symbol));
-            var hasActiveStrategy = hasBound || symbolHasStrategy || poolHasStrategy;
+            var isTrend = item.TradeStyle == StockTradeStyle.TrendSwing;
+            var hasActiveStrategy = !isTrend && (hasBound || symbolHasStrategy || poolHasStrategy);
             var isRunning = hasActiveStrategy && marketOpen;
             string? strategyName = null;
             if (item.BoundStrategyId.HasValue)
@@ -109,6 +147,19 @@ public class StockDetailAppService
             }
 
             forecastBySymbol.TryGetValue(item.Symbol, out var fc);
+            aiAvgBySymbol.TryGetValue(item.Symbol, out var aiAvg);
+            atrAvgBySymbol.TryGetValue(item.Symbol, out var atrAvg);
+            string statusText;
+            if (isTrend)
+            {
+                statusText = qty >= 100
+                    ? "趋势持仓"
+                    : marketOpen ? "待低位建仓" : "趋势观察";
+            }
+            else
+            {
+                statusText = isRunning ? "运行中" : "未运行";
+            }
             rows.Add(new PoolStockRowDto(
                 item.Id,
                 item.StockPoolId,
@@ -124,7 +175,7 @@ public class StockDetailAppService
                 isRunning,
                 hasActiveStrategy,
                 marketOpen,
-                isRunning ? "运行中" : "未运行",
+                statusText,
                 sessionLabel,
                 item.BoundStrategyId,
                 strategyName,
@@ -140,11 +191,23 @@ public class StockDetailAppService
                 fc?.ForecastForDate,
                 fc?.PredictedHigh,
                 fc?.PredictedLow,
-                fc?.Status.ToString()));
+                fc?.Status.ToString(),
+                fc?.Source.ToString(),
+                aiAvgBySymbol.ContainsKey(item.Symbol) ? aiAvg : null,
+                atrAvgBySymbol.ContainsKey(item.Symbol) ? atrAvg : null,
+                item.TradeStyle));
         }
 
         return rows;
     }
+
+    private static int SourceDisplayRank(ForecastSource source) => source switch
+    {
+        ForecastSource.CalibratedAi => 0,
+        ForecastSource.Ai => 1,
+        ForecastSource.AtrBaseline => 2,
+        _ => 9
+    };
 
     /// <summary>异步刷行情：轻量报价（批量+缓存）并回填市值/浮动盈亏。</summary>
     public async Task<IReadOnlyList<PoolQuoteSnapshotDto>> GetPoolQuotesAsync(Guid poolId, CancellationToken ct = default)
@@ -169,7 +232,7 @@ public class StockDetailAppService
                 string.Equals(p.Symbol, symbol, StringComparison.OrdinalIgnoreCase));
             var qty = pos?.Quantity ?? 0;
             var avg = pos?.AvgCost ?? 0;
-            decimal? last = q?.Last;
+            decimal? last = q is { Last: > 0 } ? q.Last : null;
             decimal? mv = last.HasValue ? last.Value * qty : null;
             decimal? upnl = last.HasValue && qty > 0 ? (last.Value - avg) * qty : qty == 0 ? 0 : null;
 
@@ -306,36 +369,29 @@ public class StockDetailAppService
             .Take(20)
             .ToListAsync(ct);
 
-        var history = forecasts.Select(f => new PriceRangeForecastDto(
-            f.Id,
-            f.Symbol,
-            f.Name,
-            f.ForecastForDate,
-            f.PredictedAt,
-            f.PredictedHigh,
-            f.PredictedLow,
-            f.ActualHigh,
-            f.ActualLow,
-            f.HighDeviationPct,
-            f.LowDeviationPct,
-            f.HighAccuracyPct,
-            f.LowAccuracyPct,
-            f.CombinedAccuracyPct,
-            f.RangeHit,
-            f.Status.ToString(),
-            f.EvaluatedAt,
-            f.Notes,
-            f.Prompt)).ToList();
+        var history = forecasts.Select(ToForecastDto).ToList();
 
-        var latest = history.FirstOrDefault();
-        var avgAcc = history
-            .Where(h => h.CombinedAccuracyPct.HasValue)
-            .Select(h => h.CombinedAccuracyPct!.Value)
-            .DefaultIfEmpty()
-            .Average();
-        decimal? avgCombined = history.Any(h => h.CombinedAccuracyPct.HasValue)
-            ? Math.Round(avgAcc, 2)
-            : null;
+        var latest = history
+            .Where(h => !string.Equals(h.Source, nameof(ForecastSource.Placeholder), StringComparison.OrdinalIgnoreCase))
+            .OrderBy(h => SourceDisplayRank(Enum.TryParse<ForecastSource>(h.Source, out var s) ? s : ForecastSource.Ai))
+            .ThenByDescending(h => h.ForecastForDate)
+            .ThenByDescending(h => h.PredictedAt)
+            .FirstOrDefault()
+            ?? history.FirstOrDefault();
+
+        var scored = history.Where(h => h.CountsTowardAccuracy && h.CombinedAccuracyPct.HasValue).ToList();
+        decimal? avgCombined = scored.Count == 0
+            ? null
+            : Math.Round(scored.Average(h => h.CombinedAccuracyPct!.Value), 2);
+        var aiScored = scored.Where(h =>
+            h.Source is nameof(ForecastSource.Ai) or nameof(ForecastSource.CalibratedAi)).ToList();
+        var atrScored = scored.Where(h => h.Source == nameof(ForecastSource.AtrBaseline)).ToList();
+        decimal? avgAi = aiScored.Count == 0
+            ? null
+            : Math.Round(aiScored.Average(h => h.CombinedAccuracyPct!.Value), 2);
+        decimal? avgAtr = atrScored.Count == 0
+            ? null
+            : Math.Round(atrScored.Average(h => h.CombinedAccuracyPct!.Value), 2);
 
         return new StockDetailPageDto(
             bundle,
@@ -348,8 +404,33 @@ public class StockDetailAppService
             latest,
             history,
             avgCombined,
-            poolItemId);
+            poolItemId,
+            avgAi,
+            avgAtr);
     }
+
+    private static PriceRangeForecastDto ToForecastDto(PriceRangeForecast f) => new(
+        f.Id,
+        f.Symbol,
+        f.Name,
+        f.ForecastForDate,
+        f.PredictedAt,
+        f.PredictedHigh,
+        f.PredictedLow,
+        f.ActualHigh,
+        f.ActualLow,
+        f.HighDeviationPct,
+        f.LowDeviationPct,
+        f.HighAccuracyPct,
+        f.LowAccuracyPct,
+        f.CombinedAccuracyPct,
+        f.RangeHit,
+        f.Status.ToString(),
+        f.EvaluatedAt,
+        f.Notes,
+        f.Prompt,
+        f.Source.ToString(),
+        f.CountsTowardAccuracy);
 
     public async Task<IntradayChartDto?> GetIntradayChartAsync(string symbol, DateTime tradeDate, CancellationToken ct = default)
     {

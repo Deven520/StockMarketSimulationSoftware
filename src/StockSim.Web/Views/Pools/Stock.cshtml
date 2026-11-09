@@ -120,7 +120,7 @@
         @if (Model.ForecastHistory is not { Count: > 0 })
         {
             <div class="p-3 small text-muted">
-                暂无预测记录。请点击上方「AI刷新预测」，或等待每晚约 22:00 夜更。规则：开市前（交易日 09:30 前）预测当日高低，否则预测下一交易日高低。
+                暂无预测记录。请点击上方「AI刷新预测」，或等待每晚约 22:00 夜更。规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。占位预测不计入准确率；系统同时写入 ATR 基线对照。
             </div>
         }
         else
@@ -131,12 +131,15 @@
                     <tr>
                         <th>预测股票</th>
                         <th>目标日</th>
+                        <th>来源</th>
                         <th>预测高/低</th>
                         <th>实际高/低</th>
                         <th>偏差% 高/低</th>
                         <th>准确率 综合</th>
+                        <th>计入榜</th>
                         <th>状态</th>
                         <th style="min-width:220px;">预测提示词</th>
+                        <th></th>
                     </tr>
                     </thead>
                     <tbody>
@@ -145,22 +148,37 @@
                         <tr>
                             <td>@row.Name @row.Symbol</td>
                             <td>@row.ForecastForDate.ToString("yyyy-MM-dd")</td>
+                            <td>@row.Source</td>
                             <td>@row.PredictedHigh.ToString("N2") / @row.PredictedLow.ToString("N2")</td>
                             <td>@(row.ActualHigh?.ToString("N2") ?? "-") / @(row.ActualLow?.ToString("N2") ?? "-")</td>
                             <td>@(row.HighDeviationPct?.ToString("N2") ?? "-") / @(row.LowDeviationPct?.ToString("N2") ?? "-")</td>
                             <td>@(row.CombinedAccuracyPct?.ToString("N1") ?? "-")</td>
+                            <td>@(row.CountsTowardAccuracy ? "是" : "否")</td>
                             <td>@row.Status</td>
                             <td class="small" style="white-space:pre-wrap;word-break:break-word;max-width:360px;" title="@(row.Prompt ?? "")">@(string.IsNullOrWhiteSpace(row.Prompt) ? "-" : row.Prompt)</td>
+                            <td>
+                                <form asp-action="DeleteForecast" method="post" class="d-inline"
+                                      onsubmit="return confirm('确认删除该预测记录？');">
+                                    <input type="hidden" name="id" value="@row.Id" />
+                                    <input type="hidden" name="symbol" value="@Model.Bundle.Board.Symbol" />
+                                    <input type="hidden" name="poolId" value="@Model.PoolId" />
+                                    <button class="btn btn-sm btn-outline-danger">删除</button>
+                                </form>
+                            </td>
                         </tr>
                     }
                     </tbody>
                 </table>
             </div>
             <div class="small text-muted p-2">
-                每晚约 22:00（及补跑）仅用真源日K对账目标日高低并写入准确率；未收盘/无日K/模拟行情不对账，已误写可在日K到位后重算。容差默认 1.5%。开市前预测当日，否则预测下一交易日。
+                每晚约 22:00（及补跑）仅用真源日K对账；未收盘/无日K/模拟行情不对账。容差 1.5%。交易日 15:00 前预测当日，否则下一交易日。盘中做 T 会用有效预测作软边界（须接近预测高/低区才触发）。
                 @if (Model.AvgCombinedAccuracyPct.HasValue)
                 {
-                    <span>近史平均综合准确率：@Model.AvgCombinedAccuracyPct?.ToString("N1")。</span>
+                    <span>计入榜平均：@Model.AvgCombinedAccuracyPct?.ToString("N1")。</span>
+                }
+                @if (Model.AvgAiAccuracyPct.HasValue || Model.AvgAtrAccuracyPct.HasValue)
+                {
+                    <span>AI @(Model.AvgAiAccuracyPct?.ToString("N1") ?? "-") / ATR @(Model.AvgAtrAccuracyPct?.ToString("N1") ?? "-")。</span>
                 }
             </div>
         }

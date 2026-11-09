@@ -1,7 +1,11 @@
 @model IReadOnlyList<StockSim.Application.Dtos.PositionDto>
 <h2>持仓</h2>
+@if (TempData["Msg"] is string msg)
+{
+    <div class="alert alert-info py-2">@msg</div>
+}
 <table class="table table-striped">
-    <thead><tr><th>代码</th><th>名称</th><th>底仓</th><th>持仓</th><th>可卖</th><th>成本</th></tr></thead>
+    <thead><tr><th>代码</th><th>名称</th><th>底仓</th><th>持仓</th><th>可卖</th><th>成本</th><th></th></tr></thead>
     <tbody>
     @foreach (var p in Model)
     {
@@ -12,6 +16,13 @@
             <td>@p.Quantity</td>
             <td>@p.SellableQuantity</td>
             <td>@p.AvgCost.ToString("N4")</td>
+            <td>
+                <form asp-action="ClearPosition" method="post" class="d-inline"
+                      onsubmit="return confirm('确认清空 @p.Symbol 持仓？池内可用资金将重置为初始资金。');">
+                    <input type="hidden" name="id" value="@p.Id" />
+                    <button class="btn btn-sm btn-outline-danger">清空</button>
+                </form>
+            </td>
         </tr>
     }
     </tbody>

@@ -1,6 +1,10 @@
 @model IReadOnlyList<StockSim.Application.Dtos.TradeDto>
 @using StockSim.Domain.Enums
 <h2>成交明细</h2>
+@if (TempData["Msg"] is string msg)
+{
+    <div class="alert alert-info py-2">@msg</div>
+}
 <form asp-action="Manual" method="post" class="row g-2 mb-3">
     <div class="col-auto"><input name="symbol" class="form-control" placeholder="代码" required /></div>
     <div class="col-auto">
@@ -14,7 +18,7 @@
     <div class="col-auto"><button class="btn btn-primary">手工模拟下单</button></div>
 </form>
 <table class="table table-sm table-striped">
-    <thead><tr><th>时间</th><th>日期</th><th>代码</th><th>方向</th><th>数量</th><th>价格</th><th>金额</th><th>费用</th></tr></thead>
+    <thead><tr><th>时间</th><th>日期</th><th>代码</th><th>方向</th><th>数量</th><th>价格</th><th>金额</th><th>费用</th><th></th></tr></thead>
     <tbody>
     @foreach (var t in Model)
     {
@@ -27,6 +31,13 @@
             <td>@t.Price.ToString("N2")</td>
             <td>@t.Amount.ToString("N2")</td>
             <td>@t.TotalFee.ToString("N2")</td>
+            <td>
+                <form asp-action="DeleteTrade" method="post" class="d-inline"
+                      onsubmit="return confirm('确认删除该成交记录？不会回滚持仓与资金。');">
+                    <input type="hidden" name="id" value="@t.Id" />
+                    <button class="btn btn-sm btn-outline-danger">删除</button>
+                </form>
+            </td>
         </tr>
     }
     </tbody>

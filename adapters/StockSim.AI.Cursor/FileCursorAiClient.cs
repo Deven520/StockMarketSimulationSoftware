@@ -40,6 +40,7 @@ public sealed class FileCursorAiClient : ICursorAiClient
         var expected = "?";
         var days = "?";
         var theme = "综合";
+        var tradeStyle = "IntradayT";
         try
         {
             using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(goalPayloadJson) ? "{}" : goalPayloadJson);
@@ -47,17 +48,27 @@ public sealed class FileCursorAiClient : ICursorAiClient
             if (doc.RootElement.TryGetProperty("horizonDays", out var d)) days = d.ToString();
             if (doc.RootElement.TryGetProperty("themePreference", out var t) && t.ValueKind == JsonValueKind.String)
                 theme = t.GetString() ?? theme;
+            if (doc.RootElement.TryGetProperty("tradeStyle", out var ts))
+                tradeStyle = ts.ValueKind == JsonValueKind.String ? (ts.GetString() ?? tradeStyle) : ts.ToString();
         }
         catch { /* ignore */ }
 
+        var isTrend = tradeStyle.Contains("Trend", StringComparison.OrdinalIgnoreCase)
+                      || tradeStyle.Contains("趋势", StringComparison.OrdinalIgnoreCase);
         var placeholder = new
         {
-            prompt =
-                $"请推荐 3~5 只适合 A 股模拟日内做T的具体股票（必须给出真实 6 位代码与简称）。" +
-                $"题材偏好「{theme}」；希望约 {days} 个交易日内组合收益接近 {expected}%；" +
-                "要求流动性好、波动适中、避免纯题材炒作与 ST；" +
-                "输出 JSON：analysis、steps、items[{symbol,name,reason,logic,risk}]（logic 为每只股的选取逻辑）。禁止只写行业方向而不给代码。",
-            rationale = "占位：根据预期收益、周期与题材偏好组装选股提示词，并强制要求输出具体股票代码与选取逻辑。",
+            prompt = isTrend
+                ? $"请推荐 3~5 只适合 A 股中期趋势/底部反转观察的具体股票（必须给出真实 6 位代码与简称）。" +
+                  $"题材偏好「{theme}」；希望约 {days} 个交易日内组合收益接近 {expected}%；" +
+                  "优先基本面改善、底部结构清晰或趋势初成，避免 ST；不做日内高频做T；" +
+                  "输出 JSON：analysis、steps、items[{symbol,name,reason,logic,risk}]。禁止只写行业方向而不给代码。"
+                : $"请推荐 3~5 只适合 A 股模拟日内做T的具体股票（必须给出真实 6 位代码与简称）。" +
+                  $"题材偏好「{theme}」；希望约 {days} 个交易日内组合收益接近 {expected}%；" +
+                  "要求流动性好、波动适中、避免纯题材炒作与 ST；" +
+                  "输出 JSON：analysis、steps、items[{symbol,name,reason,logic,risk}]（logic 为每只股的选取逻辑）。禁止只写行业方向而不给代码。",
+            rationale = isTrend
+                ? "占位：按趋势股目标组装选股提示词（底部/中期趋势观察）。"
+                : "占位：根据预期收益、周期与题材偏好组装选股提示词，并强制要求输出具体股票代码与选取逻辑。",
             analysis = "已由目标参数生成选股提示词（占位适配器）。"
         };
         var json = JsonSerializer.Serialize(placeholder, new JsonSerializerOptions { WriteIndented = true });
@@ -176,7 +187,7 @@ public sealed class FileCursorAiClient : ICursorAiClient
                 $"1. 理解优化目标：「{prompt}」。\n" +
                 "2. 结合近期盈亏与成交次数，建议略收紧单笔仓位、放宽日内次数上限。\n" +
                 "3. 参数调整不得绕过涨跌停/资金等硬风控。\n" +
-                $"4. 占位预测目标日 {forecastTargetDate:yyyy-MM-dd} 高低：高 {predictedHigh} / 低 {predictedLow}（相对参考价 {last} ±1.5%；开市前=当日，否则=下一交易日）。",
+                $"4. 占位预测目标日 {forecastTargetDate:yyyy-MM-dd} 高低：高 {predictedHigh} / 低 {predictedLow}（相对参考价 {last} ±1.5%；交易日15:00前=当日，否则=下一交易日）。",
             steps = new[]
             {
                 "读取当前策略参数与近期盈亏",
@@ -229,7 +240,9 @@ public sealed class FileCursorAiClient : ICursorAiClient
                     predictedHigh,
                     predictedLow,
                     asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-                    rationale = "占位：按参考价±1.5%给出目标日高低区间（开市前=当日，否则=下一交易日）"
+                    rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）",
+                    source = "placeholder",
+                    countsTowardAccuracy = false
                 },
                 feeModel = "AShareDefault"
             },
@@ -239,7 +252,9 @@ public sealed class FileCursorAiClient : ICursorAiClient
                 predictedHigh,
                 predictedLow,
                 asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-                rationale = "占位：按参考价±1.5%给出目标日高低区间（开市前=当日，否则=下一交易日）"
+                rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）",
+                source = "placeholder",
+                countsTowardAccuracy = false
             },
             changeNote = $"AI占位建议：{prompt}",
             risk = "须人工确认后方可生效，不得绕过风控硬约束"

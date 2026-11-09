@@ -1,37 +1,24 @@
 @echo off
-setlocal
+chcp 65001 >nul
 cd /d "%~dp0.."
-
 echo ========================================
-echo   StockSim - Cursor Agent Login
+echo   StockSim - Login Cursor Agent
 echo ========================================
 echo.
-echo Opens browser. Sign in with your Cursor account.
-echo Credential is stored under %%USERPROFILE%%\.cursor\sdk\
-echo Password is NOT saved into this repository.
+echo Browser will open. Sign in with your current Cursor account.
+echo Credentials are stored locally under ~/.cursor/sdk/ only.
 echo.
 
-if not exist "tools\node\node.exe" (
-  echo [!] Portable Node missing. Running setup first...
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-cursor-agent.ps1"
-  if errorlevel 1 (
-    echo Setup failed.
-    pause
-    exit /b 1
-  )
-)
-
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-cursor-agent.ps1" -Login -SkipDownloadNode
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-cursor-agent.ps1" -Login
 if errorlevel 1 (
   echo.
-  echo Login failed.
-  echo Create an API Key at https://cursor.com/dashboard/integrations
+  echo Login failed. You can also create an API Key at:
+  echo   https://cursor.com/dashboard/integrations
   echo then set user env CURSOR_API_KEY and restart Web.
   pause
   exit /b 1
 )
 
 echo.
-echo Login succeeded. Restart StockSim.Web and retry AI stock-pick.
+echo Login succeeded. Restart StockSim.Web before trying AI stock pick.
 pause
-endlocal

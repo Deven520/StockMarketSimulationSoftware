@@ -12,10 +12,17 @@ using StockSim.Domain.Trading;
 namespace StockSim.Application.Services;
 
 /// <summary>
-/// Worker：开市连续竞价下的自适应做T（状态机 + VWAP锚点 + 盘中 Overrides + 决策日志）。
+/// Worker：开市连续竞价下的自适应做T（状态机 + VWAP锚点 + 盘中 Overrides + 决策日志）；
+/// 另含趋势股按预测低位建仓（不做日内做T）。
 /// </summary>
 public class StrategyEngineService
 {
+    /// <summary>趋势股单标的建仓成本上限。</summary>
+    public const decimal TrendMaxPositionCash = 200_000m;
+
+    /// <summary>现价相对预测低位的软带宽（上方允许触及即买）。</summary>
+    public const decimal TrendLowSoftBandPct = 1.5m;
+
     private readonly IStockSimDataStore _db;
     private readonly IMarketDataProvider _marketData;
     private readonly IStrategyEvaluator _evaluator;
@@ -91,24 +98,44 @@ public class StrategyEngineService
             else if (binding.StockPoolId.HasValue)
             {
                 symbols.AddRange(poolItems
-                    .Where(i => i.StockPoolId == binding.StockPoolId && i.BoundStrategyId == null)
+                    .Where(i => i.StockPoolId == binding.StockPoolId
+                                && i.BoundStrategyId == null
+                                && i.TradeStyle != StockTradeStyle.TrendSwing)
                     .Select(i => i.Symbol));
             }
 
             foreach (var symbol in symbols.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                var quote = await _marketData.GetLastAsync(symbol, ct);
-                if (quote is null) continue;
-
                 var poolItem = poolItems.FirstOrDefault(i =>
                     string.Equals(i.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
                     && (binding.StockPoolId == null || i.StockPoolId == binding.StockPoolId));
+
+                // 趋势股：不走日内做T状态机（观察/跟踪，保留仓位与资金）
+                if (poolItem is { TradeStyle: StockTradeStyle.TrendSwing })
+                    continue;
+
+                var quote = await _marketData.GetLastAsync(symbol, ct);
+                if (quote is null) continue;
 
                 var position = account.Positions.FirstOrDefault(p => p.Symbol == symbol);
                 if (position is not null && string.IsNullOrWhiteSpace(position.Name) && poolItem is not null)
                     position.Name = poolItem.Name;
 
                 var runtime = await GetOrLoadRuntimeAsync(symbol, now, ct);
+                // 相对盘中已跟踪开盘价异常跳动（如模拟假价混入）则跳过本轮，避免错价成交
+                var prevSnap = _sessionTracker.TryGet(symbol);
+                if (prevSnap is { Open: > 0 } && quote.LastPrice > 0)
+                {
+                    var jumpPct = Math.Abs(quote.LastPrice - prevSnap.Open) / prevSnap.Open * 100m;
+                    if (jumpPct > 25m)
+                    {
+                        _logger.LogWarning(
+                            "Skip abnormal quote {Symbol}: last={Last} open={Open} jump={Jump:F1}%",
+                            symbol, quote.LastPrice, prevSnap.Open, jumpPct);
+                        continue;
+                    }
+                }
+
                 var snap = _sessionTracker.Update(quote, now);
                 var overrides = _adaptive.Adjust(policy, runtime, snap, now);
                 var effective = policy.ToEffective(overrides);
@@ -241,8 +268,161 @@ public class StrategyEngineService
             }
         }
 
+        filled += await EvaluateTrendSwingEntriesAsync(account, poolItems, now, ct);
         return filled;
     }
+
+    /// <summary>
+    /// 趋势股：下一交易日起，现价贴近当日预测低位时建仓；成本上限 20 万；建完不做 T。
+    /// </summary>
+    private async Task<int> EvaluateTrendSwingEntriesAsync(
+        SimAccount account,
+        List<StockPoolItem> poolItems,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var trendItems = poolItems
+            .Where(i => i.TradeStyle == StockTradeStyle.TrendSwing)
+            .ToList();
+        if (trendItems.Count == 0) return 0;
+
+        var symbols = trendItems.Select(i => i.Symbol).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var forecasts = await _db.PriceRangeForecasts
+            .Where(f => f.ForecastForDate == now.Date && symbols.Contains(f.Symbol))
+            .ToListAsync(ct);
+        var forecastBySymbol = forecasts
+            .GroupBy(f => f.Symbol, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => g.OrderBy(x => x.Source switch
+                    {
+                        ForecastSource.CalibratedAi => 0,
+                        ForecastSource.Ai => 1,
+                        ForecastSource.AtrBaseline => 2,
+                        _ => 3
+                    })
+                    .ThenByDescending(x => x.CreationTime)
+                    .First(),
+                StringComparer.OrdinalIgnoreCase);
+
+        var filled = 0;
+        foreach (var item in trendItems)
+        {
+            // 与做T一致：入池当日观察，AllowTFromDate（下一交易日）起才可自动建仓
+            if (!IsAllowTDay(item, now))
+                continue;
+
+            var position = account.Positions.FirstOrDefault(p =>
+                string.Equals(p.Symbol, item.Symbol, StringComparison.OrdinalIgnoreCase));
+            var heldCost = position is null ? 0m : position.AvgCost * position.Quantity;
+            if (heldCost >= TrendMaxPositionCash - 1m)
+                continue;
+            if (position is { Quantity: >= 100 } && heldCost >= TrendMaxPositionCash * 0.95m)
+                continue;
+
+            if (!forecastBySymbol.TryGetValue(item.Symbol, out var fc) || fc.PredictedLow <= 0)
+            {
+                _logger.LogDebug("Trend skip {Symbol}: no PredictedLow for {Date:yyyy-MM-dd}", item.Symbol, now.Date);
+                continue;
+            }
+
+            var quote = await _marketData.GetLastAsync(item.Symbol, ct);
+            if (quote is null || quote.IsSuspended || quote.IsLimitUp)
+                continue;
+
+            var price = quote.Ask > 0 ? quote.Ask : quote.LastPrice;
+            if (price <= 0) continue;
+
+            var low = fc.PredictedLow;
+            var upper = low * (1m + TrendLowSoftBandPct / 100m);
+            var lower = low * (1m - TrendLowSoftBandPct / 100m);
+            if (price > upper || price < lower)
+                continue;
+
+            var remainBudget = Math.Min(item.AvailableCash, TrendMaxPositionCash - heldCost);
+            if (remainBudget < price * 100)
+                continue;
+
+            var qty = AlignLot((int)Math.Floor(remainBudget / price));
+            if (qty < 100) continue;
+
+            var tradesToday = await TodayTradeCount(account.Id, item.Symbol, ct);
+            var signal = new TradeSignal
+            {
+                Symbol = item.Symbol,
+                Action = SignalAction.Buy,
+                Quantity = qty,
+                Price = price,
+                Reason = $"趋势低位建仓 预测低{low:F2} 现价{price:F2} 预算{remainBudget:F0}",
+                StrategyDefinitionId = item.BoundStrategyId,
+                StockPoolId = item.StockPoolId,
+                IsBaseBuild = true
+            };
+
+            var cashBudget = item.AvailableCash;
+            var risk = _riskChecker.Validate(signal, account, position, quote, tradesToday, cashBudget);
+            if (!risk.IsAllowed)
+            {
+                _db.Orders.Add(new Order
+                {
+                    SimAccountId = account.Id,
+                    StrategyDefinitionId = item.BoundStrategyId,
+                    StockPoolId = item.StockPoolId,
+                    Symbol = item.Symbol,
+                    Side = OrderSide.Buy,
+                    Quantity = qty,
+                    Price = price,
+                    Status = OrderStatus.Rejected,
+                    RejectReason = risk.Reason,
+                    TradeDate = DateTime.Today,
+                    IsManual = false
+                });
+                await _db.SaveChangesAsync(ct);
+                continue;
+            }
+
+            var result = _matchingEngine.PlaceAndFill(
+                account,
+                position,
+                signal,
+                DateTime.Today,
+                isManual: false,
+                maxTradesPerDay: null,
+                tradesToday,
+                cashBudget,
+                onCashBudgetChanged: newCash => { item.AvailableCash = newCash; });
+
+            var pos = account.Positions.FirstOrDefault(p =>
+                string.Equals(p.Symbol, item.Symbol, StringComparison.OrdinalIgnoreCase));
+            if (pos is not null && string.IsNullOrWhiteSpace(pos.Name))
+                pos.Name = item.Name;
+
+            _db.Orders.Add(result.Order);
+            if (result.Trade is not null)
+            {
+                _db.Trades.Add(result.Trade);
+                filled++;
+                if (pos is not null && pos.BaseQuantity < 100 && pos.Quantity >= 100)
+                {
+                    pos.BaseQuantity = pos.Quantity;
+                    pos.SellableQuantity = Math.Max(pos.SellableQuantity, pos.Quantity);
+                }
+
+                _logger.LogInformation(
+                    "Trend entry filled {Symbol} qty={Qty} px={Px} low={Low}",
+                    item.Symbol, result.Trade.Quantity, result.Trade.Price, low);
+
+                if (item.NotifyOnTrade)
+                    await TryNotifyTradeAsync(item, result.Trade, "趋势低位建仓", ct);
+            }
+
+            await _db.SaveChangesAsync(ct);
+        }
+
+        return filled;
+    }
+
+    private static int AlignLot(int qty) => qty / 100 * 100;
 
     private async Task TryNotifyTradeAsync(
         StockPoolItem poolItem,

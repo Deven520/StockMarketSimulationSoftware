@@ -78,6 +78,7 @@ public sealed class AiQueueAppService
 
     public async Task<int> EnqueueStrategyRefreshAllAsync(bool nightly, CancellationToken ct = default)
     {
+        // 含趋势股：夜更刷新高低预测，供下一交易日低位建仓（引擎仍跳过做T）
         var items = await _db.StockPoolItems
             .Where(i => i.BoundStrategyId != null)
             .Select(i => new { i.Id, i.Symbol, i.Name })
@@ -126,6 +127,19 @@ public sealed class AiQueueAppService
             x.RelatedGoalId, x.RelatedAiJobId, x.RelatedPoolItemId, x.Symbol,
             x.InputPayload, x.OutputPayload, x.ErrorMessage,
             x.CreationTime, x.StartedAt, x.CompletedAt, x.WorkerId);
+    }
+
+    /// <summary>删除队列项；Running 中不可删，Pending 标记取消后删除。</summary>
+    public async Task<(bool Ok, string Message)> DeleteAsync(Guid id, CancellationToken ct = default)
+    {
+        var item = await _db.AiQueueItems.FirstOrDefaultAsync(i => i.Id == id, ct);
+        if (item is null) return (false, "队列项不存在");
+        if (item.Status == AiQueueItemStatus.Running)
+            return (false, "执行中任务不可删除，请稍后再试");
+
+        _db.AiQueueItems.Remove(item);
+        await _db.SaveChangesAsync(ct);
+        return (true, "已删除队列项");
     }
 
     /// <summary>抢占并执行下一条 Pending；无任务返回 false。</summary>

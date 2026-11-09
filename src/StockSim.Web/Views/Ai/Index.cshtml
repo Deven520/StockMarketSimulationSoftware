@@ -49,6 +49,17 @@
                 <input name="themePreference" class="form-control" placeholder="例如：新能源、低估值银行、高股息" required />
             </div>
             <div class="col-12">
+                <label class="form-label d-block">选股类型</label>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="tradeStyle" id="styleT" value="IntradayT" checked />
+                    <label class="form-check-label" for="styleT">做T股（日内高抛低吸）</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="tradeStyle" id="styleTrend" value="TrendSwing" />
+                    <label class="form-check-label" for="styleTrend">趋势股（底部/中期趋势观察，不做自动做T）</label>
+                </div>
+            </div>
+            <div class="col-12">
                 <button class="btn btn-primary">提交选股任务（异步）</button>
                 <a class="btn btn-outline-secondary" asp-action="Queue">AI 队列</a>
                 <a class="btn btn-outline-secondary" asp-action="Goals">查看目标达成率</a>
@@ -76,10 +87,17 @@
             {
                 <tr>
                     <td>@g.CreationTime.ToLocalTime().ToString("MM-dd HH:mm")</td>
-                    <td>@g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.ThemePreference</td>
+                    <td>@(g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing ? "趋势" : "做T") · @g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.ThemePreference</td>
                     <td>@g.Status</td>
                     <td>@(g.LatestAchievementRate.HasValue ? $"{g.LatestAchievementRate:N1}%" : "-")</td>
-                    <td><a asp-action="GoalDetails" asp-route-id="@g.Id">详情</a></td>
+                    <td class="text-nowrap">
+                        <a asp-action="GoalDetails" asp-route-id="@g.Id">详情</a>
+                        <form asp-action="DeleteGoal" method="post" class="d-inline"
+                              onsubmit="return confirm('确认删除该投资目标？');">
+                            <input type="hidden" name="id" value="@g.Id" />
+                            <button class="btn btn-sm btn-outline-danger ms-1">删除</button>
+                        </form>
+                    </td>
                 </tr>
             }
             </tbody>
@@ -108,7 +126,17 @@
             <td><span class="badge bg-secondary">@j.Status</span></td>
             <td style="max-width:320px;"><div class="text-truncate" title="@j.Prompt">@j.Prompt</div></td>
             <td>@j.SuggestionCount</td>
-            <td><a class="btn btn-sm btn-outline-primary" asp-action="Details" asp-route-id="@j.Id">查阅</a></td>
+            <td class="text-nowrap">
+                <a class="btn btn-sm btn-outline-primary" asp-action="Details" asp-route-id="@j.Id">查阅</a>
+                @if (j.Status != AiJobStatus.Running)
+                {
+                    <form asp-action="DeleteJob" method="post" class="d-inline"
+                          onsubmit="return confirm('确认删除该 AI 任务？');">
+                        <input type="hidden" name="id" value="@j.Id" />
+                        <button class="btn btn-sm btn-outline-danger">删除</button>
+                    </form>
+                }
+            </td>
         </tr>
     }
     </tbody>

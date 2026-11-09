@@ -3,8 +3,12 @@
     <h2>盈亏分析</h2>
     <form asp-action="Settle" method="post"><button class="btn btn-outline-primary">执行今日日终结算</button></form>
 </div>
+@if (TempData["Msg"] is string msg)
+{
+    <div class="alert alert-info py-2">@msg</div>
+}
 <table class="table table-sm table-striped">
-    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th></tr></thead>
+    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th><th></th></tr></thead>
     <tbody>
     @foreach (var x in Model)
     {
@@ -15,6 +19,13 @@
             <td>@x.RealizedPnL.ToString("N2")</td>
             <td>@x.Fees.ToString("N2")</td>
             <td>@((x.WinRate * 100).ToString("N1"))%</td>
+            <td>
+                <form asp-action="DeletePnL" method="post" class="d-inline"
+                      onsubmit="return confirm('确认删除该盈亏记录？');">
+                    <input type="hidden" name="id" value="@x.Id" />
+                    <button class="btn btn-sm btn-outline-danger">删除</button>
+                </form>
+            </td>
         </tr>
     }
     </tbody>

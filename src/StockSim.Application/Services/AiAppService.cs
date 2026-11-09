@@ -252,6 +252,20 @@ public class AiAppService
             j.AnalysisSummary, j.Count, j.CompletedAt)).ToList();
     }
 
+    /// <summary>删除 AI 任务及其建议。</summary>
+    public async Task<(bool Ok, string Message)> DeleteJobAsync(Guid id, CancellationToken ct = default)
+    {
+        var job = await _db.AiJobs.Include(j => j.Suggestions).FirstOrDefaultAsync(j => j.Id == id, ct);
+        if (job is null) return (false, "任务不存在");
+        if (job.Status == AiJobStatus.Running)
+            return (false, "执行中任务不可删除");
+
+        _db.AiSuggestions.RemoveRange(job.Suggestions);
+        _db.AiJobs.Remove(job);
+        await _db.SaveChangesAsync(ct);
+        return (true, "已删除 AI 任务");
+    }
+
     public async Task<AiJobDetailDto?> GetJobDetailAsync(Guid jobId, CancellationToken ct = default)
     {
         var job = await _db.AiJobs.Include(j => j.Suggestions).FirstOrDefaultAsync(j => j.Id == jobId, ct);

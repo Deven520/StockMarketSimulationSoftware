@@ -155,6 +155,7 @@ public static class DbInitializer
                 // SQLite：布尔用 INTEGER；避免 NOT NULL 在部分旧库 ALTER 失败
                 await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "NotifyOnTrade", "INTEGER DEFAULT 0");
                 await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "AllowTFromDate", "TEXT");
+                await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "TradeStyle", "INTEGER NOT NULL DEFAULT 1");
                 await db.Database.ExecuteSqlRawAsync("""
                     UPDATE AppStockPoolItems
                     SET InitialCash = '200000', AvailableCash = '200000'
@@ -172,6 +173,7 @@ public static class DbInitializer
                     IF COL_LENGTH('AppStockPoolItems', 'AvailableCash') IS NULL ALTER TABLE AppStockPoolItems ADD AvailableCash decimal(18,2) NOT NULL DEFAULT 200000;
                     IF COL_LENGTH('AppStockPoolItems', 'NotifyOnTrade') IS NULL ALTER TABLE AppStockPoolItems ADD NotifyOnTrade bit NOT NULL DEFAULT 0;
                     IF COL_LENGTH('AppStockPoolItems', 'AllowTFromDate') IS NULL ALTER TABLE AppStockPoolItems ADD AllowTFromDate datetime2 NULL;
+                    IF COL_LENGTH('AppStockPoolItems', 'TradeStyle') IS NULL ALTER TABLE AppStockPoolItems ADD TradeStyle int NOT NULL DEFAULT 1;
                     UPDATE AppStockPoolItems SET InitialCash = 200000 WHERE InitialCash = 0;
                     UPDATE AppStockPoolItems SET AvailableCash = 200000 WHERE AvailableCash = 0 AND InitialCash = 200000;
                     """);
@@ -261,9 +263,11 @@ public static class DbInitializer
                     Status INTEGER NOT NULL,
                     StartDate TEXT NULL,
                     TargetEndDate TEXT NULL,
-                    StockPickJobId TEXT NULL
+                    StockPickJobId TEXT NULL,
+                    TradeStyle INTEGER NOT NULL DEFAULT 1
                 );
                 """);
+            await TryAddSqliteColumnAsync(db, "AppInvestmentGoals", "TradeStyle", "INTEGER NOT NULL DEFAULT 1");
             await db.Database.ExecuteSqlRawAsync("""
                 CREATE TABLE IF NOT EXISTS AppInvestmentGoalStocks (
                     Id TEXT NOT NULL PRIMARY KEY,
@@ -337,6 +341,8 @@ public static class DbInitializer
                     RangeHit INTEGER NULL,
                     EvaluatedAt TEXT NULL,
                     Status INTEGER NOT NULL,
+                    Source INTEGER NOT NULL DEFAULT 1,
+                    CountsTowardAccuracy INTEGER NOT NULL DEFAULT 1,
                     StrategyDefinitionId TEXT NULL,
                     StrategyVersionId TEXT NULL,
                     AiJobId TEXT NULL,
@@ -345,9 +351,15 @@ public static class DbInitializer
                 );
                 """);
             await TryAddSqliteColumnAsync(db, "AppPriceRangeForecasts", "Prompt", "TEXT");
+            await TryAddSqliteColumnAsync(db, "AppPriceRangeForecasts", "Source", "INTEGER NOT NULL DEFAULT 1");
+            await TryAddSqliteColumnAsync(db, "AppPriceRangeForecasts", "CountsTowardAccuracy", "INTEGER NOT NULL DEFAULT 1");
             await db.Database.ExecuteSqlRawAsync("""
                 CREATE INDEX IF NOT EXISTS IX_AppPriceRangeForecasts_Symbol_ForecastForDate
                 ON AppPriceRangeForecasts (Symbol, ForecastForDate);
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE INDEX IF NOT EXISTS IX_AppPriceRangeForecasts_Symbol_Date_Source
+                ON AppPriceRangeForecasts (Symbol, ForecastForDate, Source);
                 """);
             await db.Database.ExecuteSqlRawAsync("""
                 CREATE INDEX IF NOT EXISTS IX_AppPriceRangeForecasts_Status_ForecastForDate

@@ -225,6 +225,7 @@ public class StockSimDbContext : DbContext, IStockSimDataStore
             e.Property(x => x.LowAccuracyPct).HasPrecision(18, 4);
             e.Property(x => x.CombinedAccuracyPct).HasPrecision(18, 4);
             e.HasIndex(x => new { x.Symbol, x.ForecastForDate });
+            e.HasIndex(x => new { x.Symbol, x.ForecastForDate, x.Source });
             e.HasIndex(x => new { x.Status, x.ForecastForDate });
         });
     }
