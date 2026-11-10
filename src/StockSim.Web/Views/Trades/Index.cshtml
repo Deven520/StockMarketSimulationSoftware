@@ -18,7 +18,7 @@
     <div class="col-auto"><button class="btn btn-primary">手工模拟下单</button></div>
 </form>
 <table class="table table-sm table-striped">
-    <thead><tr><th>时间</th><th>日期</th><th>代码</th><th>方向</th><th>数量</th><th>价格</th><th>金额</th><th>费用</th><th></th></tr></thead>
+    <thead><tr><th>时间</th><th>日期</th><th>代码</th><th>名称</th><th>方向</th><th>数量</th><th>价格</th><th>金额</th><th>费用</th><th></th></tr></thead>
     <tbody>
     @foreach (var t in Model)
     {
@@ -26,7 +26,8 @@
             <td>@t.TradedAt.ToLocalTime().ToString("HH:mm:ss")</td>
             <td>@t.TradeDate.ToString("yyyy-MM-dd")</td>
             <td>@t.Symbol</td>
-            <td>@t.Side</td>
+            <td>@t.Name</td>
+            <td>@(t.Side == OrderSide.Buy ? "买入" : "卖出")</td>
             <td>@t.Quantity</td>
             <td>@t.Price.ToString("N2")</td>
             <td>@t.Amount.ToString("N2")</td>

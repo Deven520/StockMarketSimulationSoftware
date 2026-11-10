@@ -160,6 +160,7 @@ public record ManualOrderRequest(string Symbol, OrderSide Side, int Quantity, de
 public record TradeDto(
     Guid Id,
     string Symbol,
+    string Name,
     OrderSide Side,
     int Quantity,
     decimal Price,

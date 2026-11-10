@@ -113,12 +113,49 @@ public class TradingAppService
         if (to.HasValue) q = q.Where(t => t.TradeDate <= to.Value.Date);
         if (!string.IsNullOrWhiteSpace(symbol)) q = q.Where(t => t.Symbol == symbol);
 
-        return await q.OrderByDescending(t => t.TradedAt)
-            .Select(t => new TradeDto(
-                t.Id, t.Symbol, t.Side, t.Quantity, t.Price, t.TotalFee, t.Amount,
-                t.TradeDate, t.TradedAt, t.StrategyDefinitionId))
+        var trades = await q.OrderByDescending(t => t.TradedAt)
             .Take(500)
             .ToListAsync(ct);
+        if (trades.Count == 0) return Array.Empty<TradeDto>();
+
+        var symbols = trades.Select(t => t.Symbol).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var poolNames = await _db.StockPoolItems
+            .Where(i => symbols.Contains(i.Symbol))
+            .Select(i => new { i.Symbol, i.Name })
+            .ToListAsync(ct);
+        var posNames = await _db.Positions
+            .Where(p => symbols.Contains(p.Symbol))
+            .Select(p => new { p.Symbol, p.Name })
+            .ToListAsync(ct);
+
+        var nameBySymbol = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in posNames)
+        {
+            if (!string.IsNullOrWhiteSpace(p.Name))
+                nameBySymbol[p.Symbol] = p.Name;
+        }
+        foreach (var i in poolNames)
+        {
+            if (!string.IsNullOrWhiteSpace(i.Name))
+                nameBySymbol[i.Symbol] = i.Name; // 池内名称优先
+        }
+
+        return trades.Select(t =>
+        {
+            nameBySymbol.TryGetValue(t.Symbol, out var name);
+            return new TradeDto(
+                t.Id,
+                t.Symbol,
+                string.IsNullOrWhiteSpace(name) ? t.Symbol : name,
+                t.Side,
+                t.Quantity,
+                t.Price,
+                t.TotalFee,
+                t.Amount,
+                t.TradeDate,
+                t.TradedAt,
+                t.StrategyDefinitionId);
+        }).ToList();
     }
 
     /// <summary>删除成交记录（不回滚持仓/资金，仅清理明细）。</summary>
