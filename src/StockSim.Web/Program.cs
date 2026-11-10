@@ -11,6 +11,13 @@ var builder = WebApplication.CreateBuilder(args);
 var repoRoot = FindRepoRoot(builder.Environment.ContentRootPath);
 builder.Configuration["MarketData:ReplayDirectory"] ??= Path.Combine(repoRoot, "data", "replay");
 builder.Configuration["AI:WorkDirectory"] ??= Path.Combine(repoRoot, "data", "ai");
+// 文件夹搬迁后强制对齐 Node/桥接路径，避免 publish 里残留旧绝对路径
+var portableNode = Path.Combine(repoRoot, "tools", "node", "node.exe");
+if (File.Exists(portableNode))
+    builder.Configuration["AI:Cursor:NodeExecutable"] = portableNode;
+var bridgeDir = Path.Combine(repoRoot, "adapters", "cursor-agent-bridge");
+if (Directory.Exists(bridgeDir))
+    builder.Configuration["AI:Cursor:BridgeDirectory"] = bridgeDir;
 
 builder.Services.AddStockSimInfrastructure(builder.Configuration);
 builder.Services.AddStockSimApplication(builder.Configuration);
@@ -70,6 +77,7 @@ static string FindRepoRoot(string start)
     while (dir is not null)
     {
         if (File.Exists(Path.Combine(dir.FullName, "StockSim.slnx"))
+            || Directory.Exists(Path.Combine(dir.FullName, "adapters", "cursor-agent-bridge"))
             || Directory.Exists(Path.Combine(dir.FullName, "docs")))
         {
             return dir.FullName;

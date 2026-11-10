@@ -1,10 +1,10 @@
 StockSim local publish
 ======================
-Web:    D:\Projects\StockMarketSimulationSoftware\publish\web
-Worker: D:\Projects\StockMarketSimulationSoftware\publish\worker
-SQLite: D:\Projects\StockMarketSimulationSoftware\publish\web\stocksim.db
-Replay: D:\Projects\StockMarketSimulationSoftware\data\replay
-AI:     D:\Projects\StockMarketSimulationSoftware\data\ai
+Web:    D:\Projects\StockMarketWeb\StockMarketSimulationSoftware\publish\web
+Worker: D:\Projects\StockMarketWeb\StockMarketSimulationSoftware\publish\worker
+SQLite: D:\Projects\StockMarketWeb\StockMarketSimulationSoftware\publish\web\stocksim.db
+Replay: D:\Projects\StockMarketWeb\StockMarketSimulationSoftware\data\replay
+AI:     D:\Projects\StockMarketWeb\StockMarketSimulationSoftware\data\ai
 URL:    http://localhost:5167
 
 Start:  .\scripts\start-local.ps1

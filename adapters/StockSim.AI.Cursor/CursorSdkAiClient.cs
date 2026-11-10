@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -90,6 +91,12 @@ public sealed class CursorSdkAiClient : ICursorAiClient
                     "已配置 API Key（环境变量 / appsettings / secrets 文件）。");
             }
 
+            var bridgeDir = ResolveBridgeDir();
+            var nodeExe = ResolveNodeExecutable();
+            _logger?.LogInformation(
+                "AI status probe: repo={Repo} node={Node} bridge={Bridge}",
+                _repoRoot, nodeExe, bridgeDir);
+
             var json = await InvokeNodeScriptAsync("status.mjs", stdin: null, timeoutSec: 30, ct);
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
@@ -105,8 +112,11 @@ public sealed class CursorSdkAiClient : ICursorAiClient
         }
         catch (Exception ex)
         {
+            var detail = FlattenException(ex);
+            _logger?.LogWarning(ex, "Cursor Agent 状态检查失败: {Detail}", detail);
             return new CursorAiConnectionStatus(false, "error", null,
-                "状态检查失败: " + ex.Message + "。请运行 scripts\\setup-cursor-agent.ps1 与 login-cursor-agent.bat");
+                "状态检查失败: " + detail +
+                "。请确认已运行 scripts\\setup-cursor-agent.ps1 与 login-cursor-agent.bat，并重启 Web。");
         }
     }
 
@@ -248,6 +258,16 @@ public sealed class CursorSdkAiClient : ICursorAiClient
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+
+        // 确保 SDK 能读到本机登录态（~/.cursor/sdk），避免搬迁/服务启动后环境缺省
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(userProfile))
+        {
+            psi.Environment["USERPROFILE"] = userProfile;
+            if (!psi.Environment.ContainsKey("HOME") || string.IsNullOrWhiteSpace(psi.Environment["HOME"]))
+                psi.Environment["HOME"] = userProfile;
+        }
+
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
             psi.Environment["CURSOR_API_KEY"] = apiKey;
@@ -425,20 +445,35 @@ public sealed class CursorSdkAiClient : ICursorAiClient
         var configured = _configuration.GetValue<string>("AI:Cursor:BridgeDirectory");
         if (!string.IsNullOrWhiteSpace(configured))
         {
-            return Path.IsPathRooted(configured)
+            var candidate = Path.IsPathRooted(configured)
                 ? configured
                 : Path.GetFullPath(Path.Combine(_repoRoot, configured));
+            // 文件夹搬迁后旧绝对路径会失效，回退到仓库相对路径
+            if (Directory.Exists(candidate) && File.Exists(Path.Combine(candidate, "status.mjs")))
+                return candidate;
+
+            _logger?.LogWarning("AI:Cursor:BridgeDirectory 无效，改用仓库默认路径: {Path}", candidate);
         }
 
-        return Path.Combine(_repoRoot, "adapters", "cursor-agent-bridge");
+        var fallback = Path.Combine(_repoRoot, "adapters", "cursor-agent-bridge");
+        if (!Directory.Exists(fallback))
+        {
+            throw new InvalidOperationException(
+                $"未找到桥接目录: {fallback}（repoRoot={_repoRoot}）。请确认仓库完整。");
+        }
+
+        return fallback;
     }
 
     private string ResolveNodeExecutable()
     {
         var configured = _configuration.GetValue<string>("AI:Cursor:NodeExecutable");
-        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
+        if (!string.IsNullOrWhiteSpace(configured))
         {
-            return configured;
+            if (File.Exists(configured))
+                return configured;
+
+            _logger?.LogWarning("AI:Cursor:NodeExecutable 不存在，尝试自动发现: {Path}", configured);
         }
 
         var portable = Path.Combine(_repoRoot, "tools", "node", "node.exe");
@@ -460,7 +495,22 @@ public sealed class CursorSdkAiClient : ICursorAiClient
         }
 
         throw new InvalidOperationException(
-            "未找到 Node.js。请运行 scripts\\setup-cursor-agent.ps1（会下载便携 Node 到 tools\\node）。");
+            $"未找到 Node.js（repoRoot={_repoRoot}）。请运行 scripts\\setup-cursor-agent.ps1。");
+    }
+
+    private static string FlattenException(Exception ex)
+    {
+        var parts = new List<string>();
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            var msg = (cur.Message ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(msg))
+                msg = cur.GetType().Name;
+            if (parts.Count == 0 || !parts[^1].Contains(msg, StringComparison.Ordinal))
+                parts.Add(msg);
+        }
+
+        return parts.Count == 0 ? ex.GetType().Name : string.Join(" | ", parts);
     }
 
     private static string? FindOnPath(string name)
@@ -487,8 +537,10 @@ public sealed class CursorSdkAiClient : ICursorAiClient
         var dir = new DirectoryInfo(start);
         while (dir is not null)
         {
-            if (File.Exists(Path.Combine(dir.FullName, "StockSim.slnx"))
-                || Directory.Exists(Path.Combine(dir.FullName, "docs")))
+            var hasSlnx = File.Exists(Path.Combine(dir.FullName, "StockSim.slnx"));
+            var hasBridge = Directory.Exists(Path.Combine(dir.FullName, "adapters", "cursor-agent-bridge"));
+            var hasDocs = Directory.Exists(Path.Combine(dir.FullName, "docs"));
+            if (hasSlnx || hasBridge || hasDocs)
             {
                 return dir.FullName;
             }
