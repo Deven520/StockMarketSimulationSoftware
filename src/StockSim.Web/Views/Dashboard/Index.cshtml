@@ -42,13 +42,14 @@
 
 <h4>近30日盈亏（当前池）</h4>
 <table class="table table-sm table-striped">
-    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th><th></th></tr></thead>
+    <thead><tr><th>日期</th><th>代码</th><th>名称</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th><th></th></tr></thead>
     <tbody>
     @foreach (var x in history)
     {
         <tr>
             <td>@x.TradeDate.ToString("yyyy-MM-dd")</td>
             <td>@x.Symbol</td>
+            <td>@x.Name</td>
             <td>@x.TradeCount</td>
             <td>@x.RealizedPnL.ToString("N2")</td>
             <td>@x.Fees.ToString("N2")</td>
@@ -102,6 +103,16 @@
         showSymbol: true,
         symbolSize: 7,
         connectNulls: true,
+        emphasis: {
+          focus: 'series',
+          scale: true,
+          lineStyle: { width: 3 },
+          itemStyle: { borderWidth: 2 }
+        },
+        blur: {
+          lineStyle: { opacity: 0.12 },
+          itemStyle: { opacity: 0.12 }
+        },
         data: dates.map(d => {
           const p = byDate[d];
           if (!p || p.returnPct == null) return null;
@@ -117,30 +128,27 @@
     return {
       color: ['#e74c3c', '#3498db', '#2ecc71', '#9b59b6', '#f39c12', '#1abc9c', '#e67e22', '#34495e'],
       tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'cross' },
-        formatter: (params) => {
-          if (!params || !params.length) return '';
-          const date = params[0].axisValue;
+        trigger: 'item',
+        formatter: (item) => {
+          if (!item) return '';
+          const raw = item.data;
+          if (!raw || raw.value == null) return '';
+          const p = raw.point || {};
+          const m = raw.meta || {};
+          const styleLabel = m.tradeStyle === 'TrendSwing' ? '趋势' : '做T';
+          const date = p.date || item.name || '';
           let html = `<div style="font-weight:600;margin-bottom:6px;">${date}</div>`;
-          params.forEach(item => {
-            const raw = item.data;
-            if (!raw || raw.value == null) return;
-            const p = raw.point || {};
-            const m = raw.meta || {};
-            const styleLabel = m.tradeStyle === 'TrendSwing' ? '趋势' : '做T';
-            html += `<div style="margin:6px 0 2px;">${item.marker}<b>${item.seriesName}</b> · ${styleLabel}</div>`;
-            html += `<div style="padding-left:16px;line-height:1.5;">`;
-            html += `收益率：<b>${fmtPct(p.returnPct)}</b><br/>`;
-            html += `累计盈亏：${fmtNum(p.cumRealizedPnL, 2)}<br/>`;
-            html += `当日盈亏：${fmtNum(p.dayRealizedPnL, 2)} · 费用 ${fmtNum(p.dayFees, 2)}<br/>`;
-            html += `成交 ${p.tradeCount ?? 0} 笔 · 胜率 ${((p.winRate || 0) * 100).toFixed(1)}%<br/>`;
-            html += `初始资金：${fmtNum(m.initialCash, 0)}`;
-            if (p.availableCash != null || p.positionCost != null) {
-              html += `<br/>可用现金：${fmtNum(p.availableCash, 2)} · 持仓成本：${fmtNum(p.positionCost, 2)}`;
-            }
-            html += `</div>`;
-          });
+          html += `<div style="margin:6px 0 2px;">${item.marker}<b>${item.seriesName}</b> · ${styleLabel}</div>`;
+          html += `<div style="padding-left:16px;line-height:1.5;">`;
+          html += `收益率：<b>${fmtPct(p.returnPct)}</b><br/>`;
+          html += `累计盈亏：${fmtNum(p.cumRealizedPnL, 2)}<br/>`;
+          html += `当日盈亏：${fmtNum(p.dayRealizedPnL, 2)} · 费用 ${fmtNum(p.dayFees, 2)}<br/>`;
+          html += `成交 ${p.tradeCount ?? 0} 笔 · 胜率 ${((p.winRate || 0) * 100).toFixed(1)}%<br/>`;
+          html += `初始资金：${fmtNum(m.initialCash, 0)}`;
+          if (p.availableCash != null || p.positionCost != null) {
+            html += `<br/>可用现金：${fmtNum(p.availableCash, 2)} · 持仓成本：${fmtNum(p.positionCost, 2)}`;
+          }
+          html += `</div>`;
           return html;
         }
       },

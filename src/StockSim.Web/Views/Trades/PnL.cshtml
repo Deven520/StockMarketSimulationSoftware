@@ -8,13 +8,14 @@
     <div class="alert alert-info py-2">@msg</div>
 }
 <table class="table table-sm table-striped">
-    <thead><tr><th>日期</th><th>代码</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th><th></th></tr></thead>
+    <thead><tr><th>日期</th><th>代码</th><th>名称</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th><th></th></tr></thead>
     <tbody>
     @foreach (var x in Model)
     {
         <tr>
             <td>@x.TradeDate.ToString("yyyy-MM-dd")</td>
             <td>@x.Symbol</td>
+            <td>@x.Name</td>
             <td>@x.TradeCount</td>
             <td>@x.RealizedPnL.ToString("N2")</td>
             <td>@x.Fees.ToString("N2")</td>

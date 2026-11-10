@@ -164,12 +164,57 @@ public class PnLAppService
             }
         }
 
-        return await q.OrderByDescending(x => x.TradeDate)
-            .Select(x => new DailyPnLDto(
-                x.Id, x.TradeDate, x.Symbol, x.StockPoolId, x.StrategyDefinitionId,
-                x.TradeCount, x.RealizedPnL, x.Fees, x.WinRate))
+        var rows = await q.OrderByDescending(x => x.TradeDate)
             .Take(500)
             .ToListAsync(ct);
+        if (rows.Count == 0) return Array.Empty<DailyPnLDto>();
+
+        var nameSymbols = rows
+            .Select(x => x.Symbol)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Cast<string>()
+            .ToList();
+        var nameBySymbol = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (nameSymbols.Count > 0)
+        {
+            var posNames = await _db.Positions
+                .Where(p => nameSymbols.Contains(p.Symbol))
+                .Select(p => new { p.Symbol, p.Name })
+                .ToListAsync(ct);
+            foreach (var p in posNames)
+            {
+                if (!string.IsNullOrWhiteSpace(p.Name))
+                    nameBySymbol[p.Symbol] = p.Name;
+            }
+
+            var poolNames = await _db.StockPoolItems
+                .Where(i => nameSymbols.Contains(i.Symbol))
+                .Select(i => new { i.Symbol, i.Name })
+                .ToListAsync(ct);
+            foreach (var i in poolNames)
+            {
+                if (!string.IsNullOrWhiteSpace(i.Name))
+                    nameBySymbol[i.Symbol] = i.Name; // 池内名称优先
+            }
+        }
+
+        return rows.Select(x =>
+        {
+            var symbol = x.Symbol ?? "";
+            nameBySymbol.TryGetValue(symbol, out var name);
+            return new DailyPnLDto(
+                x.Id,
+                x.TradeDate,
+                x.Symbol,
+                string.IsNullOrWhiteSpace(name) ? (string.IsNullOrWhiteSpace(symbol) ? "-" : symbol) : name,
+                x.StockPoolId,
+                x.StrategyDefinitionId,
+                x.TradeCount,
+                x.RealizedPnL,
+                x.Fees,
+                x.WinRate);
+        }).ToList();
     }
 
     public async Task<DashboardDto> GetDashboardAsync(CancellationToken ct = default)

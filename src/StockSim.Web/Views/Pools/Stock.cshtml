@@ -11,6 +11,19 @@
 <link rel="stylesheet" href="~/css/stock-terminal.css" asp-append-version="true" />
 
 <div class="ths-terminal">
+    @if (Model.Bundle.IsSimulated)
+    {
+        <div class="alert alert-warning mb-2 py-2">
+            <strong>当前为模拟行情（非真实盘口）</strong>
+            —— 东方财富真源拉取失败已回退。价格/行业/市值/资金流不可用于交易判断。
+            请检查本机能否访问 push2.eastmoney.com（或系统代理 7897 等），然后刷新本页。
+            <div class="small text-muted mt-1">@Model.Bundle.DataSourceNote</div>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Model.Bundle.DataSourceNote) && Model.Bundle.DataSourceNote.Contains("失败"))
+    {
+        <div class="alert alert-danger mb-2 py-2">@Model.Bundle.DataSourceNote</div>
+    }
     <div class="ths-topbar d-flex justify-content-between align-items-start flex-wrap gap-2">
         <div>
             <div class="ths-title">

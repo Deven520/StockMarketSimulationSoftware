@@ -61,13 +61,15 @@ public sealed class SimulatedStockDetailProvider : IStockDetailProvider
             AsOf = DateTime.Now
         };
 
+        var totalCap = Round2(50 + (decimal)rng.NextDouble() * 2000);
+        var circCap = Round2(Math.Min(totalCap, 30 + (decimal)rng.NextDouble() * totalCap));
         var fundamentals = new StockFundamentals
         {
             PeTtm = Round2(8 + (decimal)rng.NextDouble() * 40),
             Pb = Round2(0.6m + (decimal)rng.NextDouble() * 4),
             PsTtm = Round2(0.5m + (decimal)rng.NextDouble() * 8),
-            TotalMarketCapYi = Round2(50 + (decimal)rng.NextDouble() * 2000),
-            CircMarketCapYi = Round2(30 + (decimal)rng.NextDouble() * 1500),
+            TotalMarketCapYi = totalCap,
+            CircMarketCapYi = circCap,
             Roe = Round2((decimal)(rng.NextDouble() * 25 - 2)),
             Industry = PickIndustry(seed)
         };

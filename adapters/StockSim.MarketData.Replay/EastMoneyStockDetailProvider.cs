@@ -15,6 +15,21 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
     private readonly ILogger<EastMoneyStockDetailProvider> _logger;
     private readonly SimulatedStockDetailProvider _fallback = new();
 
+    private static readonly string[] PushHosts =
+    [
+        "push2.eastmoney.com",
+        "push2delay.eastmoney.com",
+        "82.push2.eastmoney.com",
+        "83.push2.eastmoney.com",
+        "85.push2.eastmoney.com"
+    ];
+
+    private static readonly string[] HisHosts =
+    [
+        "push2his.eastmoney.com",
+        "push2hisdelay.eastmoney.com"
+    ];
+
     public EastMoneyStockDetailProvider(HttpClient http, ILogger<EastMoneyStockDetailProvider> logger)
     {
         _http = http;
@@ -29,6 +44,11 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
             _http.DefaultRequestHeaders.UserAgent.ParseAdd(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
         }
+
+        if (!_http.DefaultRequestHeaders.Contains("Referer"))
+            _http.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://quote.eastmoney.com/");
+        if (!_http.DefaultRequestHeaders.Contains("Accept"))
+            _http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
     }
 
     public async Task<LightStockQuote?> GetLightQuoteAsync(string symbol, string? name = null, CancellationToken ct = default)
@@ -118,7 +138,7 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
                 $"&secids={Uri.EscapeDataString(secids)}" +
                 "&fields=f12,f14,f2,f3,f18,f162,f167";
 
-            using var doc = await GetJsonAsync(url, ct);
+            using var doc = await GetJsonAsync(url, preferHis: false, ct);
             var data = doc?.RootElement.GetPropertyOrNull("data");
             var diff = data?.GetPropertyOrNull("diff");
             if (diff is null || diff.Value.ValueKind != JsonValueKind.Array)
@@ -255,16 +275,22 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
 
     private async Task<QuoteSnap?> FetchQuoteAsync(string secid, CancellationToken ct)
     {
-        // fltt=2 返回真实小数；字段含最新价/名称/PE/PB/市值等
+        // fltt=2 返回真实小数；字段含最新价/名称/PE/PB/市值/行业等
         var url =
             $"https://push2.eastmoney.com/api/qt/stock/get?fltt=2&invt=2&secid={secid}" +
-            "&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f116,f117,f162,f167,f168,f169,f170";
+            "&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f100,f116,f117,f127,f162,f167,f168,f169,f170";
 
-        using var doc = await GetJsonAsync(url, ct);
+        using var doc = await GetJsonAsync(url, preferHis: false, ct);
         if (doc is null) return null;
         var data = doc.RootElement.GetPropertyOrNull("data");
         if (data is null || data.Value.ValueKind != JsonValueKind.Object) return null;
         var d = data.Value;
+
+        var totalYi = ToYi(GetDecimal(d, "f116"));
+        var circYi = ToYi(GetDecimal(d, "f117"));
+        // 防御：流通市值不应大于总市值（接口偶发字段对调或单位异常）
+        if (totalYi is > 0 && circYi is > 0 && circYi > totalYi * 1.05m)
+            (totalYi, circYi) = (circYi, totalYi);
 
         return new QuoteSnap(
             GetString(d, "f58") ?? string.Empty,
@@ -280,9 +306,9 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
             {
                 PeTtm = NullIfZero(GetDecimal(d, "f162")),
                 Pb = NullIfZero(GetDecimal(d, "f167")),
-                TotalMarketCapYi = ToYi(GetDecimal(d, "f116")),
-                CircMarketCapYi = ToYi(GetDecimal(d, "f117")),
-                Industry = null
+                TotalMarketCapYi = totalYi,
+                CircMarketCapYi = circYi,
+                Industry = GetString(d, "f127") ?? GetString(d, "f100")
             });
     }
 
@@ -295,7 +321,7 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
             $"?secid={secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57" +
             $"&klt=101&fqt=1&beg={beg}&end={end}&lmt=260";
 
-        using var doc = await GetJsonAsync(url, ct);
+        using var doc = await GetJsonAsync(url, preferHis: true, ct);
         var klines = doc?.RootElement.GetPropertyOrNull("data")?.GetPropertyOrNull("klines");
         if (klines is null || klines.Value.ValueKind != JsonValueKind.Array) return Array.Empty<DailyBar>();
 
@@ -375,7 +401,7 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
             $"?secid={secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57" +
             $"&klt={klt}&fqt=1&beg={d}&end={d}&lmt=1000";
 
-        using var doc = await GetJsonAsync(url, ct);
+        using var doc = await GetJsonAsync(url, preferHis: true, ct);
         var klines = doc?.RootElement.GetPropertyOrNull("data")?.GetPropertyOrNull("klines");
         if (klines is null || klines.Value.ValueKind != JsonValueKind.Array) return Array.Empty<MinuteBar>();
 
@@ -409,7 +435,7 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
             $"?secid={secid}&fields1=f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13" +
             "&fields2=f51,f52,f53,f54,f55,f56,f57,f58&iscr=0&ndays=1&iscca=0";
 
-        using var doc = await GetJsonAsync(url, ct);
+        using var doc = await GetJsonAsync(url, preferHis: false, ct);
         var trends = doc?.RootElement.GetPropertyOrNull("data")?.GetPropertyOrNull("trends");
         if (trends is null || trends.Value.ValueKind != JsonValueKind.Array) return Array.Empty<MinuteBar>();
 
@@ -448,7 +474,7 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
             "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get" +
             $"?lmt=0&klt=1&secid={secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65";
 
-        using var doc = await GetJsonAsync(url, ct);
+        using var doc = await GetJsonAsync(url, preferHis: false, ct);
         var klines = doc?.RootElement.GetPropertyOrNull("data")?.GetPropertyOrNull("klines");
         if (klines is null || klines.Value.ValueKind != JsonValueKind.Array || klines.Value.GetArrayLength() == 0)
         {
@@ -483,17 +509,44 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
         };
     }
 
-    private async Task<JsonDocument?> GetJsonAsync(string url, CancellationToken ct)
+    private async Task<JsonDocument?> GetJsonAsync(string url, bool preferHis, CancellationToken ct)
     {
-        using var resp = await _http.GetAsync(url, ct);
-        if (!resp.IsSuccessStatusCode)
+        var hosts = preferHis ? HisHosts : PushHosts;
+        Exception? lastEx = null;
+        foreach (var host in hosts)
         {
-            _logger.LogWarning("HTTP {Code} for {Url}", (int)resp.StatusCode, url);
-            return null;
+            var tryUrl = ReplaceHost(url, host);
+            try
+            {
+                using var resp = await _http.GetAsync(tryUrl, ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    _logger.LogDebug("HTTP {Code} for {Url}", (int)resp.StatusCode, tryUrl);
+                    continue;
+                }
+
+                await using var stream = await resp.Content.ReadAsStreamAsync(ct);
+                return await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                lastEx = ex;
+                _logger.LogDebug(ex, "EastMoney host {Host} failed", host);
+            }
         }
 
-        await using var stream = await resp.Content.ReadAsStreamAsync(ct);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+        if (lastEx is not null)
+            _logger.LogWarning(lastEx, "EastMoney all hosts failed for {Url}", url);
+        else
+            _logger.LogWarning("EastMoney all hosts returned non-success for {Url}", url);
+        return null;
+    }
+
+    private static string ReplaceHost(string url, string host)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return url;
+        var b = new UriBuilder(uri) { Host = host };
+        return b.Uri.ToString();
     }
 
     private static string ToSecId(string symbol)

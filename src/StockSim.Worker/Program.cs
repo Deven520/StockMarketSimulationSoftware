@@ -43,14 +43,29 @@ builder.Services.AddHttpClient<IStockDetailProvider, EastMoneyStockDetailProvide
     client.Timeout = TimeSpan.FromSeconds(30);
     client.DefaultRequestHeaders.UserAgent.ParseAdd(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    client.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://quote.eastmoney.com/");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    UseProxy = true,
+    AutomaticDecompression = System.Net.DecompressionMethods.All
 });
 builder.Services.AddHttpClient<IMarketNewsProvider, EastMoneyMarketNewsProvider>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(20);
+    client.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://quote.eastmoney.com/");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    UseProxy = true,
+    AutomaticDecompression = System.Net.DecompressionMethods.All
 });
 builder.Services.AddHttpClient<IStockSuggestProvider, EastMoneyStockSuggestProvider>(client =>
 {
     client.Timeout = TimeSpan.FromSeconds(10);
+    client.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://quote.eastmoney.com/");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    UseProxy = true,
+    AutomaticDecompression = System.Net.DecompressionMethods.All
 });
 builder.Services.AddHostedService<StrategyWorker>();
 builder.Services.AddHostedService<DailySettlementWorker>();

@@ -174,6 +174,7 @@ public record DailyPnLDto(
     Guid Id,
     DateTime TradeDate,
     string? Symbol,
+    string Name,
     Guid? StockPoolId,
     Guid? StrategyDefinitionId,
     int TradeCount,
