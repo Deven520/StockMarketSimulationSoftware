@@ -1,0 +1,23 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "StockSim.Domain/1.0.0": {
+        "runtime": {
+          "StockSim.Domain.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "StockSim.Domain/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

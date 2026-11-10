@@ -10,8 +10,8 @@ public sealed class TradeAlertOptions
     /// <summary>同股同方向去重窗口（分钟）。</summary>
     public int DedupMinutes { get; set; } = 3;
 
-    /// <summary>HTTP 超时秒数。</summary>
-    public int TimeoutSeconds { get; set; } = 3;
+    /// <summary>HTTP 超时秒数（PushPlus 建议 ≥10，过短易误报失败）。</summary>
+    public int TimeoutSeconds { get; set; } = 15;
 
     /// <summary>通用 Webhook（企业微信/飞书/钉钉/自定义），POST JSON 或 text。</summary>
     public string? WebhookUrl { get; set; }

@@ -23,7 +23,8 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
         _http = http;
         _options = options.Value;
         _logger = logger;
-        var timeoutSec = Math.Clamp(_options.TimeoutSeconds, 1, 30);
+        // 默认偏短会导致 PushPlus 偶发超时；至少 10 秒
+        var timeoutSec = Math.Clamp(_options.TimeoutSeconds <= 0 ? 15 : _options.TimeoutSeconds, 5, 60);
         _http.Timeout = TimeSpan.FromSeconds(timeoutSec);
     }
 
@@ -41,7 +42,7 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
             return;
         }
 
-        var (_, anyOk) = await SendCoreAsync(message, cancellationToken);
+        var (_, anyOk, _) = await SendCoreAsync(message, cancellationToken);
         if (anyOk)
             _lastSent[dedupKey] = DateTime.UtcNow;
     }
@@ -57,9 +58,14 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
                 "未配置 Alerts:WebhookUrl / PushPlusToken。请在 Web 的 appsettings.json 填写后重启（正式成交通知还需 Worker 同步配置并 Enabled=true）");
         }
 
-        var (text, anyOk) = await SendCoreAsync(message, cancellationToken);
+        var (text, anyOk, detail) = await SendCoreAsync(message, cancellationToken);
         if (!anyOk)
-            return (false, "测试推送失败，请查看 Web 日志（Webhook/PushPlus 返回非成功）");
+        {
+            return (false,
+                string.IsNullOrWhiteSpace(detail)
+                    ? "测试推送失败，请查看 Web 日志（Webhook/PushPlus 返回非成功）"
+                    : $"测试推送失败：{detail}");
+        }
 
         var channels = new List<string>();
         if (!string.IsNullOrWhiteSpace(_options.WebhookUrl)) channels.Add("Webhook");
@@ -70,19 +76,28 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
         return (true, $"测试推送已发出（{string.Join("+", channels)}）：{text}.{enabledHint}");
     }
 
-    private async Task<(string Text, bool AnyOk)> SendCoreAsync(
+    private async Task<(string Text, bool AnyOk, string Detail)> SendCoreAsync(
         TradeAlertMessage message,
         CancellationToken cancellationToken)
     {
         var title = message.FormatTitle();
         var text = message.FormatText(_options.TitlePrefix);
         var anyOk = false;
+        var details = new List<string>();
 
         if (!string.IsNullOrWhiteSpace(_options.WebhookUrl))
-            anyOk |= await TrySendWebhookAsync(text, cancellationToken);
+        {
+            var (ok, err) = await TrySendWebhookAsync(text, cancellationToken);
+            anyOk |= ok;
+            if (!ok) details.Add($"Webhook: {err}");
+        }
 
         if (!string.IsNullOrWhiteSpace(_options.PushPlusToken))
-            anyOk |= await TrySendPushPlusAsync(title, text, cancellationToken);
+        {
+            var (ok, err) = await TrySendPushPlusAsync(title, text, cancellationToken);
+            anyOk |= ok;
+            if (!ok) details.Add($"PushPlus: {err}");
+        }
 
         if (string.IsNullOrWhiteSpace(_options.WebhookUrl)
             && string.IsNullOrWhiteSpace(_options.PushPlusToken))
@@ -90,10 +105,10 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
             _logger.LogWarning("No WebhookUrl / PushPlusToken configured. Title: {Title} Message: {Text}", title, text);
         }
 
-        return ($"{title} · {text}", anyOk);
+        return ($"{title} · {text}", anyOk, string.Join("；", details));
     }
 
-    private async Task<bool> TrySendWebhookAsync(string text, CancellationToken ct)
+    private async Task<(bool Ok, string Error)> TrySendWebhookAsync(string text, CancellationToken ct)
     {
         try
         {
@@ -118,30 +133,34 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
                 {
                     msgtype = "text",
                     text = new { content = text },
-                    // 兼容自定义：同时带 content
                     content = text
                 }
             };
 
             using var resp = await _http.PostAsJsonAsync(_options.WebhookUrl, body, ct);
+            var respBody = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
             {
-                var err = await resp.Content.ReadAsStringAsync(ct);
-                _logger.LogWarning("Webhook alert failed {Status}: {Body}", (int)resp.StatusCode, Truncate(err));
-                return false;
+                _logger.LogWarning("Webhook alert failed {Status}: {Body}", (int)resp.StatusCode, Truncate(respBody));
+                return (false, $"HTTP {(int)resp.StatusCode} {Truncate(respBody)}");
             }
 
             _logger.LogInformation("Webhook alert sent");
-            return true;
+            return (true, "");
+        }
+        catch (TaskCanceledException)
+        {
+            _logger.LogWarning("Webhook alert timeout ({Timeout}s)", _http.Timeout.TotalSeconds);
+            return (false, $"超时（{_http.Timeout.TotalSeconds:0}s）");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Webhook alert exception");
-            return false;
+            return (false, ex.Message);
         }
     }
 
-    private async Task<bool> TrySendPushPlusAsync(string title, string text, CancellationToken ct)
+    private async Task<(bool Ok, string Error)> TrySendPushPlusAsync(string title, string text, CancellationToken ct)
     {
         try
         {
@@ -164,15 +183,49 @@ public sealed class CompositeTradeAlertNotifier : ITradeAlertNotifier
             if (!resp.IsSuccessStatusCode)
             {
                 _logger.LogWarning("PushPlus failed {Status}: {Body}", (int)resp.StatusCode, Truncate(body));
-                return false;
+                return (false, $"HTTP {(int)resp.StatusCode} {Truncate(body)}");
+            }
+
+            // PushPlus 常返回 HTTP 200，业务成败看 JSON.code
+            if (TryParsePushPlusCode(body, out var code, out var msg) && code != 200)
+            {
+                _logger.LogWarning("PushPlus business failed code={Code} msg={Msg}", code, msg);
+                return (false, string.IsNullOrWhiteSpace(msg) ? $"业务码 {code}" : msg);
             }
 
             _logger.LogInformation("PushPlus alert sent: {Body}", Truncate(body));
-            return true;
+            return (true, "");
+        }
+        catch (TaskCanceledException)
+        {
+            _logger.LogWarning("PushPlus alert timeout ({Timeout}s)", _http.Timeout.TotalSeconds);
+            return (false, $"超时（{_http.Timeout.TotalSeconds:0}s），请增大 Alerts:TimeoutSeconds");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "PushPlus alert exception");
+            return (false, ex.Message);
+        }
+    }
+
+    private static bool TryParsePushPlusCode(string? body, out int code, out string? msg)
+    {
+        code = 0;
+        msg = null;
+        if (string.IsNullOrWhiteSpace(body)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("code", out var c)) return false;
+            code = c.ValueKind == JsonValueKind.Number
+                ? c.GetInt32()
+                : int.TryParse(c.GetString(), out var n) ? n : 0;
+            if (doc.RootElement.TryGetProperty("msg", out var m) && m.ValueKind == JsonValueKind.String)
+                msg = m.GetString();
+            return true;
+        }
+        catch
+        {
             return false;
         }
     }
