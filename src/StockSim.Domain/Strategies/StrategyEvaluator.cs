@@ -266,7 +266,7 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                     Symbol = quote.Symbol,
                     Action = SignalAction.Buy,
                     Quantity = tradeQty,
-                    Price = quote.Ask > 0 ? quote.Ask : quote.LastPrice,
+                    Price = QuotePriceGuard.SafeAsk(quote),
                     Reason = $"动量低吸 偏离 {deviation:F2}%",
                     StrategyDefinitionId = id,
                     StockPoolId = poolId
@@ -304,7 +304,7 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 $"建底仓：涨跌幅 {chg:F2}% 不在 [{eff.BaseBuildMinChangePct:F1},{eff.BaseBuildMaxChangePct:F1}]");
         }
 
-        var price = quote.Ask > 0 ? quote.Ask : quote.LastPrice;
+        var price = QuotePriceGuard.SafeAsk(quote);
         if (price <= 0)
             return None(quote.Symbol, id, poolId, "建底仓：无效价格");
 
@@ -359,7 +359,7 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
             Symbol = quote.Symbol,
             Action = SignalAction.Buy,
             Quantity = qty,
-            Price = quote.Ask > 0 ? quote.Ask : quote.LastPrice,
+            Price = QuotePriceGuard.SafeAsk(quote),
             Reason = reason,
             StrategyDefinitionId = id,
             StockPoolId = poolId
@@ -395,7 +395,7 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
             Symbol = quote.Symbol,
             Action = SignalAction.Sell,
             Quantity = qty,
-            Price = quote.Bid > 0 ? quote.Bid : quote.LastPrice,
+            Price = QuotePriceGuard.SafeBid(quote),
             Reason = reason,
             StrategyDefinitionId = id,
             StockPoolId = poolId

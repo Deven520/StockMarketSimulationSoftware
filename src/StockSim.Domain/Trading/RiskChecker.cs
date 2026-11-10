@@ -45,6 +45,14 @@ public sealed class DefaultRiskChecker : IRiskChecker
             return RiskCheckResult.Reject("停牌不可交易");
         }
 
+        // 成交价相对最新价严重偏离（常见于脏 Bid/Ask）则拒绝，避免错价入账
+        if (quote.LastPrice > 0
+            && !QuotePriceGuard.IsTradePriceSane(signal.Price, quote.LastPrice))
+        {
+            return RiskCheckResult.Reject(
+                $"成交价异常 {signal.Price:F4} vs 最新价 {quote.LastPrice:F4}");
+        }
+
         if (signal.Action == SignalAction.Buy && quote.IsLimitUp)
         {
             return RiskCheckResult.Reject("涨停不可买入");
