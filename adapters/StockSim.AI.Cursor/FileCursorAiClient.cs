@@ -53,22 +53,44 @@ public sealed class FileCursorAiClient : ICursorAiClient
         }
         catch { /* ignore */ }
 
+        var isNextDay = tradeStyle.Contains("NextDay", StringComparison.OrdinalIgnoreCase)
+                        || tradeStyle.Contains("次日", StringComparison.OrdinalIgnoreCase);
         var isTrend = tradeStyle.Contains("Trend", StringComparison.OrdinalIgnoreCase)
                       || tradeStyle.Contains("趋势", StringComparison.OrdinalIgnoreCase);
+        string promptText;
+        string rationaleText;
+        if (isNextDay)
+        {
+            promptText =
+                $"请推荐 3~5 只下一交易日更可能上涨的具体 A 股（必须给出真实 6 位代码与简称）。" +
+                $"题材偏好「{theme}」；目标次日涨幅约 {expected}%；" +
+                "请结合当日走势与量能、近期历史强弱、题材与近期新闻/热点；排除 ST；" +
+                "每只 reason 写清次日看多依据；输出 JSON：analysis、steps、items[{symbol,name,reason,logic,risk}]。禁止只写行业方向而不给代码。";
+            rationaleText = "占位：按次日上涨预选目标组装选股提示词（当日+历史+新闻）。";
+        }
+        else if (isTrend)
+        {
+            promptText =
+                $"请推荐 3~5 只适合 A 股中期趋势/底部反转观察的具体股票（必须给出真实 6 位代码与简称）。" +
+                $"题材偏好「{theme}」；希望约 {days} 个交易日内组合收益接近 {expected}%；" +
+                "优先基本面改善、底部结构清晰或趋势初成，避免 ST；不做日内高频做T；" +
+                "输出 JSON：analysis、steps、items[{symbol,name,reason,logic,risk}]。禁止只写行业方向而不给代码。";
+            rationaleText = "占位：按趋势股目标组装选股提示词（底部/中期趋势观察）。";
+        }
+        else
+        {
+            promptText =
+                $"请推荐 3~5 只适合 A 股模拟日内做T的具体股票（必须给出真实 6 位代码与简称）。" +
+                $"题材偏好「{theme}」；希望约 {days} 个交易日内组合收益接近 {expected}%；" +
+                "要求流动性好、波动适中、避免纯题材炒作与 ST；" +
+                "输出 JSON：analysis、steps、items[{symbol,name,reason,logic,risk}]（logic 为每只股的选取逻辑）。禁止只写行业方向而不给代码。";
+            rationaleText = "占位：根据预期收益、周期与题材偏好组装选股提示词，并强制要求输出具体股票代码与选取逻辑。";
+        }
+
         var placeholder = new
         {
-            prompt = isTrend
-                ? $"请推荐 3~5 只适合 A 股中期趋势/底部反转观察的具体股票（必须给出真实 6 位代码与简称）。" +
-                  $"题材偏好「{theme}」；希望约 {days} 个交易日内组合收益接近 {expected}%；" +
-                  "优先基本面改善、底部结构清晰或趋势初成，避免 ST；不做日内高频做T；" +
-                  "输出 JSON：analysis、steps、items[{symbol,name,reason,logic,risk}]。禁止只写行业方向而不给代码。"
-                : $"请推荐 3~5 只适合 A 股模拟日内做T的具体股票（必须给出真实 6 位代码与简称）。" +
-                  $"题材偏好「{theme}」；希望约 {days} 个交易日内组合收益接近 {expected}%；" +
-                  "要求流动性好、波动适中、避免纯题材炒作与 ST；" +
-                  "输出 JSON：analysis、steps、items[{symbol,name,reason,logic,risk}]（logic 为每只股的选取逻辑）。禁止只写行业方向而不给代码。",
-            rationale = isTrend
-                ? "占位：按趋势股目标组装选股提示词（底部/中期趋势观察）。"
-                : "占位：根据预期收益、周期与题材偏好组装选股提示词，并强制要求输出具体股票代码与选取逻辑。",
+            prompt = promptText,
+            rationale = rationaleText,
             analysis = "已由目标参数生成选股提示词（占位适配器）。"
         };
         var json = JsonSerializer.Serialize(placeholder, new JsonSerializerOptions { WriteIndented = true });

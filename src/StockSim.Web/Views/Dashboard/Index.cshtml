@@ -33,6 +33,7 @@
                 <button type="button" class="btn btn-outline-secondary active" data-return-filter="all">全部</button>
                 <button type="button" class="btn btn-outline-secondary" data-return-filter="IntradayT">做T</button>
                 <button type="button" class="btn btn-outline-secondary" data-return-filter="TrendSwing">趋势</button>
+                <button type="button" class="btn btn-outline-secondary" data-return-filter="NextDayRise">次日预涨</button>
             </div>
         </div>
         <div id="poolReturnChart" style="height: 420px;"></div>
@@ -135,7 +136,8 @@
           if (!raw || raw.value == null) return '';
           const p = raw.point || {};
           const m = raw.meta || {};
-          const styleLabel = m.tradeStyle === 'TrendSwing' ? '趋势' : '做T';
+          const styleLabel = m.tradeStyle === 'NextDayRise' ? '次日预涨'
+            : (m.tradeStyle === 'TrendSwing' ? '趋势' : '做T');
           const date = p.date || item.name || '';
           let html = `<div style="font-weight:600;margin-bottom:6px;">${date}</div>`;
           html += `<div style="margin:6px 0 2px;">${item.marker}<b>${item.seriesName}</b> · ${styleLabel}</div>`;

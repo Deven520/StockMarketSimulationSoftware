@@ -30,16 +30,18 @@
         <select name="tradeStyle" class="form-select" title="交易类型">
             <option value="IntradayT" selected>做T股</option>
             <option value="TrendSwing">趋势股</option>
+            <option value="NextDayRise">次日预涨</option>
         </select>
     </div>
     <div class="col-auto"><button class="btn btn-primary" type="submit">添加</button></div>
-    <div class="col-12"><span class="text-muted small">代码、名称至少填一项；趋势股仅观察，不挂做T策略。</span></div>
+    <div class="col-12"><span class="text-muted small">代码、名称至少填一项；趋势股/次日预涨仅观察不挂做T；次日预涨会标记预涨日（下一交易日）。</span></div>
 </form>
 <div class="mb-2">
     <div class="btn-group btn-group-sm" role="group" aria-label="类型筛选">
         <button type="button" class="btn btn-outline-secondary active" data-style-filter="all">全部</button>
         <button type="button" class="btn btn-outline-secondary" data-style-filter="t">做T股</button>
         <button type="button" class="btn btn-outline-secondary" data-style-filter="trend">趋势股</button>
+        <button type="button" class="btn btn-outline-secondary" data-style-filter="nextday">次日预涨</button>
     </div>
 </div>
 <div class="row g-2 mb-3 align-items-center">
@@ -75,12 +77,13 @@
             <th>代码</th>
             <th>名称</th>
             <th>类型</th>
+            <th title="次日预涨目标交易日">预涨日</th>
             <th>最新价</th>
             <th>涨跌幅</th>
             <th>持仓</th>
             <th>成本</th>
             <th>市值</th>
-            <th>浮动盈亏</th>
+            <th title="(最新价−成本)/成本×100">浮动盈亏/%</th>
             <th>今日盈亏</th>
             <th>可用资金</th>
             <th title="目标日高低价预测（交易日15:00前=当日，否则下一交易日）；括号内为近史AI/ATR准确率">@forecastCol</th>
@@ -94,20 +97,45 @@
     @foreach (var i in Model)
     {
         var dayUp = (i.TodayRealizedPnL ?? 0) >= 0;
+        var styleKey = i.TradeStyle switch
+        {
+            StockSim.Domain.Enums.StockTradeStyle.NextDayRise => "nextday",
+            StockSim.Domain.Enums.StockTradeStyle.TrendSwing => "trend",
+            _ => "t"
+        };
+        var riseExpired = i.PredictedRiseDate.HasValue && i.PredictedRiseDate.Value.Date < DateTime.Today;
         <tr data-symbol="@i.Symbol" data-qty="@i.PositionQty" data-avg="@i.AvgCost"
-            data-trade-style="@(i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing ? "trend" : "t")">
+            data-trade-style="@styleKey">
             <td>
                 <a asp-action="Stock" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId" class="fw-semibold text-decoration-none">@i.Symbol</a>
             </td>
             <td>@i.Name</td>
             <td>
-                @if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing)
+                @if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
+                {
+                    <span class="badge bg-warning text-dark">次日预涨</span>
+                }
+                else if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing)
                 {
                     <span class="badge bg-info text-dark">趋势</span>
                 }
                 else
                 {
                     <span class="badge bg-primary">做T</span>
+                }
+            </td>
+            <td class="small @(riseExpired ? "text-muted" : "")">
+                @if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise && i.PredictedRiseDate.HasValue)
+                {
+                    @i.PredictedRiseDate.Value.ToString("yyyy-MM-dd")
+                    if (riseExpired)
+                    {
+                        <span class="ms-1">(已过)</span>
+                    }
+                }
+                else
+                {
+                    <span class="text-muted">-</span>
                 }
             </td>
             <td class="js-last text-muted">…</td>
@@ -148,7 +176,11 @@
                 }
             </td>
             <td>
-                @if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing)
+                @if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
+                {
+                    <span class="badge bg-warning text-dark">@i.RuntimeStatusText</span>
+                }
+                else if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing)
                 {
                     <span class="badge bg-info text-dark">@i.RuntimeStatusText</span>
                 }
@@ -317,8 +349,17 @@
                 setTone(chgEl, lastOk ? q.changePercent : null);
                 mvEl.textContent = q.marketValue == null ? '-' : fmt(q.marketValue, 0);
                 mvEl.classList.remove('text-muted');
-                upnlEl.textContent = q.unrealizedPnL == null ? '-' : fmt(q.unrealizedPnL, 2);
-                setTone(upnlEl, q.unrealizedPnL);
+                if (q.unrealizedPnL == null) {
+                    upnlEl.textContent = '-';
+                    setTone(upnlEl, null);
+                } else {
+                    const pct = q.unrealizedPnLPct;
+                    const pctText = pct == null
+                        ? ''
+                        : ` (${pct >= 0 ? '+' : ''}${Number(pct).toFixed(2)}%)`;
+                    upnlEl.textContent = fmt(q.unrealizedPnL, 2) + pctText;
+                    setTone(upnlEl, q.unrealizedPnL);
+                }
             });
             statusEl.textContent = '行情已更新 ' + new Date().toLocaleTimeString();
             statusEl.classList.remove('text-danger');
@@ -331,16 +372,29 @@
 
     refreshQuotes();
 
+    const styleFilterKey = `stockPoolStyleFilter:${poolId}`;
+    const allowedFilters = new Set(['all', 't', 'trend', 'nextday']);
+
+    function applyStyleFilter(filter) {
+        const f = allowedFilters.has(filter) ? filter : 'all';
+        document.querySelectorAll('[data-style-filter]').forEach(b => {
+            b.classList.toggle('active', (b.getAttribute('data-style-filter') || 'all') === f);
+        });
+        table.querySelectorAll('tbody tr[data-trade-style]').forEach(tr => {
+            const style = tr.getAttribute('data-trade-style');
+            tr.style.display = (f === 'all' || style === f) ? '' : 'none';
+        });
+        try { localStorage.setItem(styleFilterKey, f); } catch { /* ignore */ }
+    }
+
     document.querySelectorAll('[data-style-filter]').forEach(btn => {
         btn.addEventListener('click', () => {
-            const filter = btn.getAttribute('data-style-filter') || 'all';
-            document.querySelectorAll('[data-style-filter]').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            table.querySelectorAll('tbody tr[data-trade-style]').forEach(tr => {
-                const style = tr.getAttribute('data-trade-style');
-                tr.style.display = (filter === 'all' || style === filter) ? '' : 'none';
-            });
+            applyStyleFilter(btn.getAttribute('data-style-filter') || 'all');
         });
     });
+
+    let savedFilter = 'all';
+    try { savedFilter = localStorage.getItem(styleFilterKey) || 'all'; } catch { /* ignore */ }
+    applyStyleFilter(savedFilter);
 })();
 </script>

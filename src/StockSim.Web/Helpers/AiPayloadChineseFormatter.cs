@@ -169,6 +169,10 @@ public static class AiPayloadChineseFormatter
     {
         ["IntradayT"] = "做T股",
         ["TrendSwing"] = "趋势股",
+        ["NextDayRise"] = "次日上涨预选",
+        ["nextTradingDay"] = "下一交易日",
+        ["marketContext"] = "市场上下文",
+        ["hotNews"] = "热点新闻",
         ["AdaptiveIntradayT"] = "自适应日内做T",
         ["true"] = "是",
         ["false"] = "否",

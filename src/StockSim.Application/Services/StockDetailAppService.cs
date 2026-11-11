@@ -137,7 +137,8 @@ public class StockDetailAppService
                 && activeStrategyIds.Contains(b.StrategyDefinitionId));
             var poolHasStrategy = !boundSymbolSet.Contains(item.Symbol)
                                   && bindings.Any(b => b.StockPoolId == poolId && string.IsNullOrEmpty(b.Symbol));
-            var isTrend = item.TradeStyle == StockTradeStyle.TrendSwing;
+            var isTrend = StockTradeStyleHelper.IsTrendLike(item.TradeStyle);
+            var isNextDay = item.TradeStyle == StockTradeStyle.NextDayRise;
             var hasActiveStrategy = !isTrend && (hasBound || symbolHasStrategy || poolHasStrategy);
             var isRunning = hasActiveStrategy && marketOpen;
             string? strategyName = null;
@@ -150,7 +151,15 @@ public class StockDetailAppService
             aiAvgBySymbol.TryGetValue(item.Symbol, out var aiAvg);
             atrAvgBySymbol.TryGetValue(item.Symbol, out var atrAvg);
             string statusText;
-            if (isTrend)
+            if (isNextDay)
+            {
+                var rise = item.PredictedRiseDate?.Date;
+                var riseLabel = rise?.ToString("MM-dd") ?? "次日";
+                statusText = qty >= 100
+                    ? $"次日预涨持仓({riseLabel})"
+                    : marketOpen ? $"待低位建仓·预涨{riseLabel}" : $"次日预涨·{riseLabel}";
+            }
+            else if (isTrend)
             {
                 statusText = qty >= 100
                     ? "趋势持仓"
@@ -195,7 +204,8 @@ public class StockDetailAppService
                 fc?.Source.ToString(),
                 aiAvgBySymbol.ContainsKey(item.Symbol) ? aiAvg : null,
                 atrAvgBySymbol.ContainsKey(item.Symbol) ? atrAvg : null,
-                item.TradeStyle));
+                item.TradeStyle,
+                item.PredictedRiseDate));
         }
 
         return rows;
@@ -235,6 +245,9 @@ public class StockDetailAppService
             decimal? last = q is { Last: > 0 } ? q.Last : null;
             decimal? mv = last.HasValue ? last.Value * qty : null;
             decimal? upnl = last.HasValue && qty > 0 ? (last.Value - avg) * qty : qty == 0 ? 0 : null;
+            decimal? upnlPct = last.HasValue && qty > 0 && avg > 0
+                ? Math.Round((last.Value - avg) / avg * 100m, 2)
+                : qty == 0 ? 0 : null;
 
             snaps.Add(new PoolQuoteSnapshotDto(
                 symbol,
@@ -243,7 +256,8 @@ public class StockDetailAppService
                 q?.PeTtm,
                 q?.Pb,
                 mv,
-                upnl));
+                upnl,
+                upnlPct));
         }
 
         return snaps;

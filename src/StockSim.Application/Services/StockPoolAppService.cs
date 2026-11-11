@@ -4,6 +4,7 @@ using StockSim.Application.Dtos;
 using StockSim.Domain.Entities;
 using StockSim.Domain.Enums;
 using StockSim.Domain.MarketData;
+using StockSim.Domain.Strategies;
 using StockSim.Domain.Trading;
 
 namespace StockSim.Application.Services;
@@ -64,7 +65,8 @@ public class StockPoolAppService
             .Where(i => i.StockPoolId == poolId)
             .Select(i => new StockPoolItemDto(
                 i.Id, i.StockPoolId, i.Symbol, i.Name, i.Tags, i.Source,
-                i.BoundStrategyId, i.StrategyUpdatedAt, i.InitialCash, i.AvailableCash, i.NotifyOnTrade, i.TradeStyle))
+                i.BoundStrategyId, i.StrategyUpdatedAt, i.InitialCash, i.AvailableCash, i.NotifyOnTrade, i.TradeStyle,
+                i.PredictedRiseDate))
             .ToListAsync(ct);
     }
 
@@ -173,7 +175,14 @@ public class StockPoolAppService
             ct: ct);
 
         if (item is null) return (null, "添加失败");
-        return tradeStyle == StockTradeStyle.TrendSwing
+        if (tradeStyle == StockTradeStyle.NextDayRise)
+        {
+            var day = item.PredictedRiseDate?.ToString("yyyy-MM-dd") ?? "下一交易日";
+            return (item,
+                $"已添加次日预涨 {finalName}({finalSymbol})，预涨日 {day}；按趋势逻辑低位建仓（上限{StrategyEngineService.TrendMaxPositionCash:N0}），不做自动做T");
+        }
+
+        return StockTradeStyleHelper.IsTrendLike(tradeStyle)
             ? (item, $"已添加趋势股 {finalName}({finalSymbol})，下一交易日起按预测低位建仓（上限{StrategyEngineService.TrendMaxPositionCash:N0}），不做自动做T")
             : (item, $"已添加 {finalName}({finalSymbol})，默认策略已就绪，AI 正在后台优化");
     }
@@ -189,13 +198,34 @@ public class StockPoolAppService
         var symbol = request.Symbol.Trim().ToUpperInvariant();
         var exists = await _db.StockPoolItems.FirstOrDefaultAsync(
             i => i.StockPoolId == poolId && i.Symbol == symbol, ct);
+        var riseDate = tradeStyle == StockTradeStyle.NextDayRise
+            ? PriceForecastMetrics.NextTradingDay(DateTime.Today)
+            : (DateTime?)null;
+
         if (exists is not null)
         {
+            var changed = false;
             if (exists.TradeStyle != tradeStyle)
             {
                 exists.TradeStyle = tradeStyle;
-                await _db.SaveChangesAsync(ct);
+                changed = true;
             }
+
+            if (tradeStyle == StockTradeStyle.NextDayRise)
+            {
+                if (exists.PredictedRiseDate != riseDate)
+                {
+                    exists.PredictedRiseDate = riseDate;
+                    changed = true;
+                }
+            }
+            else if (exists.PredictedRiseDate.HasValue)
+            {
+                exists.PredictedRiseDate = null;
+                changed = true;
+            }
+
+            if (changed) await _db.SaveChangesAsync(ct);
 
             if (autoGenerateStrategy && !exists.BoundStrategyId.HasValue)
             {
@@ -223,6 +253,7 @@ public class StockPoolAppService
             Remark = request.Remark,
             Source = source,
             TradeStyle = tradeStyle,
+            PredictedRiseDate = riseDate,
             InitialCash = DefaultPerStockCash,
             AvailableCash = DefaultPerStockCash,
             // 入池当日可按行情建底仓；下一交易日起才自动做 T（趋势股仍保留字段，但引擎会跳过做T）
@@ -373,5 +404,5 @@ public class StockPoolAppService
 
     private static StockPoolItemDto MapItem(StockPoolItem i) =>
         new(i.Id, i.StockPoolId, i.Symbol, i.Name, i.Tags, i.Source, i.BoundStrategyId, i.StrategyUpdatedAt,
-            i.InitialCash, i.AvailableCash, i.NotifyOnTrade, i.TradeStyle);
+            i.InitialCash, i.AvailableCash, i.NotifyOnTrade, i.TradeStyle, i.PredictedRiseDate);
 }

@@ -156,6 +156,17 @@ public static class DbInitializer
                 await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "NotifyOnTrade", "INTEGER DEFAULT 0");
                 await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "AllowTFromDate", "TEXT");
                 await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "TradeStyle", "INTEGER NOT NULL DEFAULT 1");
+                await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "PredictedRiseDate", "TEXT NULL");
+                await db.Database.ExecuteSqlRawAsync("""
+                    UPDATE AppStockPoolItems
+                    SET TradeStyle = 3
+                    WHERE TradeStyle = 2 AND Tags LIKE '%次日上涨%';
+                    """);
+                await db.Database.ExecuteSqlRawAsync("""
+                    UPDATE AppStockPoolItems
+                    SET PredictedRiseDate = AllowTFromDate
+                    WHERE TradeStyle = 3 AND PredictedRiseDate IS NULL AND AllowTFromDate IS NOT NULL;
+                    """);
                 await db.Database.ExecuteSqlRawAsync("""
                     UPDATE AppStockPoolItems
                     SET InitialCash = '200000', AvailableCash = '200000'
@@ -174,6 +185,9 @@ public static class DbInitializer
                     IF COL_LENGTH('AppStockPoolItems', 'NotifyOnTrade') IS NULL ALTER TABLE AppStockPoolItems ADD NotifyOnTrade bit NOT NULL DEFAULT 0;
                     IF COL_LENGTH('AppStockPoolItems', 'AllowTFromDate') IS NULL ALTER TABLE AppStockPoolItems ADD AllowTFromDate datetime2 NULL;
                     IF COL_LENGTH('AppStockPoolItems', 'TradeStyle') IS NULL ALTER TABLE AppStockPoolItems ADD TradeStyle int NOT NULL DEFAULT 1;
+                    IF COL_LENGTH('AppStockPoolItems', 'PredictedRiseDate') IS NULL ALTER TABLE AppStockPoolItems ADD PredictedRiseDate datetime2 NULL;
+                    UPDATE AppStockPoolItems SET TradeStyle = 3 WHERE TradeStyle = 2 AND Tags LIKE N'%次日上涨%';
+                    UPDATE AppStockPoolItems SET PredictedRiseDate = AllowTFromDate WHERE TradeStyle = 3 AND PredictedRiseDate IS NULL AND AllowTFromDate IS NOT NULL;
                     UPDATE AppStockPoolItems SET InitialCash = 200000 WHERE InitialCash = 0;
                     UPDATE AppStockPoolItems SET AvailableCash = 200000 WHERE AvailableCash = 0 AND InitialCash = 200000;
                     """);
@@ -280,9 +294,21 @@ public static class DbInitializer
                     PoolItemId TEXT NULL,
                     SuggestionId TEXT NULL,
                     BaselineCash TEXT NOT NULL,
-                    BaselinePrice TEXT NULL
+                    BaselinePrice TEXT NULL,
+                    TargetTradeDate TEXT NULL,
+                    ActualClose TEXT NULL,
+                    NextDayReturnPct TEXT NULL,
+                    DirectionHit INTEGER NULL,
+                    TargetHit INTEGER NULL,
+                    EvaluatedAt TEXT NULL
                 );
                 """);
+            await TryAddSqliteColumnAsync(db, "AppInvestmentGoalStocks", "TargetTradeDate", "TEXT NULL");
+            await TryAddSqliteColumnAsync(db, "AppInvestmentGoalStocks", "ActualClose", "TEXT NULL");
+            await TryAddSqliteColumnAsync(db, "AppInvestmentGoalStocks", "NextDayReturnPct", "TEXT NULL");
+            await TryAddSqliteColumnAsync(db, "AppInvestmentGoalStocks", "DirectionHit", "INTEGER NULL");
+            await TryAddSqliteColumnAsync(db, "AppInvestmentGoalStocks", "TargetHit", "INTEGER NULL");
+            await TryAddSqliteColumnAsync(db, "AppInvestmentGoalStocks", "EvaluatedAt", "TEXT NULL");
             await db.Database.ExecuteSqlRawAsync("""
                 CREATE UNIQUE INDEX IF NOT EXISTS IX_AppInvestmentGoalStocks_Goal_Symbol
                 ON AppInvestmentGoalStocks (InvestmentGoalId, Symbol);

@@ -5,7 +5,7 @@
 <div class="mb-3 d-flex justify-content-between align-items-start flex-wrap gap-2">
     <div>
         <h2 class="mb-1">目标详情</h2>
-        <div class="text-muted">@(g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing ? "趋势股" : "做T股") · @g.ThemePreference · 预期 @g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.Status</div>
+        <div class="text-muted">@StockSim.Domain.Enums.StockTradeStyleHelper.ToLabel(g.TradeStyle) · @g.ThemePreference · 预期 @g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.Status</div>
     </div>
     <div class="d-flex gap-2">
         <form asp-action="RefreshGoalProgress" method="post" class="d-inline">
@@ -45,6 +45,27 @@
             <div class="fs-4">@g.StockCount</div>
         </div>
     </div>
+    @if (g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
+    {
+        <div class="col-md-4">
+            <div class="border rounded p-3">
+                <div class="text-muted small">次日方向命中率</div>
+                <div class="fs-4">@(g.DirectionHitRatePct?.ToString("N1") ?? "-")%</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="border rounded p-3">
+                <div class="text-muted small">次日目标命中率</div>
+                <div class="fs-4">@(g.TargetHitRatePct?.ToString("N1") ?? "-")%</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="border rounded p-3">
+                <div class="text-muted small">等权次日收益</div>
+                <div class="fs-4">@(g.AvgNextDayReturnPct?.ToString("N2") ?? "-")%</div>
+            </div>
+        </div>
+    }
 </div>
 
 @if (!string.IsNullOrWhiteSpace(g.GeneratedPrompt))
@@ -57,7 +78,24 @@
 
 <h5>入选股票</h5>
 <table class="table table-sm mb-4">
-    <thead><tr><th>代码</th><th>名称</th><th>基准资金</th><th>选取逻辑</th><th>风险</th></tr></thead>
+    <thead>
+    <tr>
+        <th>代码</th>
+        <th>名称</th>
+        <th>基准资金</th>
+        @if (g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
+        {
+            <th>基准价</th>
+            <th>目标日</th>
+            <th>收盘</th>
+            <th>次日收益%</th>
+            <th>方向</th>
+            <th>目标</th>
+        }
+        <th>选取逻辑</th>
+        <th>风险</th>
+    </tr>
+    </thead>
     <tbody>
     @foreach (var s in Model.Stocks)
     {
@@ -66,13 +104,24 @@
             <td>@s.Symbol</td>
             <td>@s.Name</td>
             <td>@s.BaselineCash.ToString("N0")</td>
+            @if (g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
+            {
+                <td>@(s.BaselinePrice?.ToString("N2") ?? "-")</td>
+                <td>@(s.TargetTradeDate?.ToString("yyyy-MM-dd") ?? "-")</td>
+                <td>@(s.ActualClose?.ToString("N2") ?? "-")</td>
+                <td class="@(s.NextDayReturnPct is null ? "" : (s.NextDayReturnPct >= 0 ? "text-danger" : "text-success"))">
+                    @(s.NextDayReturnPct?.ToString("N2") ?? "-")
+                </td>
+                <td>@(s.DirectionHit is null ? "-" : (s.DirectionHit.Value ? "命中" : "未中"))</td>
+                <td>@(s.TargetHit is null ? "-" : (s.TargetHit.Value ? "命中" : "未中"))</td>
+            }
             <td class="small" style="white-space:pre-wrap;max-width:28rem;">@(logic ?? "—")</td>
             <td class="small text-muted">@(s.Risk ?? "—")</td>
         </tr>
     }
     @if (Model.Stocks.Count == 0)
     {
-        <tr><td colspan="5" class="text-muted">尚未确认入选</td></tr>
+        <tr><td colspan="11" class="text-muted">尚未确认入选</td></tr>
     }
     </tbody>
 </table>

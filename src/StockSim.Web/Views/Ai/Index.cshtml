@@ -7,7 +7,7 @@
     var goals = (IReadOnlyList<InvestmentGoalDto>)(ViewBag.Goals ?? Array.Empty<InvestmentGoalDto>());
 }
 <h2>AI 工作台</h2>
-<p class="text-muted">输入<strong>预期收益、周期、题材偏好</strong> → 任务进入 <a asp-action="Queue">AI 队列</a> 异步执行 → 完成后勾选入库；每日跟踪目标达成率。</p>
+<p class="text-muted">输入<strong>预期收益、周期、题材偏好、选股类型</strong>（含次日上涨预选）→ 任务进入 <a asp-action="Queue">AI 队列</a> 异步执行 → 完成后勾选入库；每日跟踪达成率；次日预选在目标日收盘后统计命中率。</p>
 @{
     var qc = ViewBag.QueueCounts as (int Pending, int Running, int Succeeded, int Failed)?;
 }
@@ -58,6 +58,10 @@
                     <input class="form-check-input" type="radio" name="tradeStyle" id="styleTrend" value="TrendSwing" />
                     <label class="form-check-label" for="styleTrend">趋势股（底部/中期趋势观察，不做自动做T）</label>
                 </div>
+                <div class="form-check form-check-inline">
+                    <input class="form-check-input" type="radio" name="tradeStyle" id="styleNextDay" value="NextDayRise" />
+                    <label class="form-check-label" for="styleNextDay">次日上涨预选（当日+历史+新闻，预选下一交易日偏多）</label>
+                </div>
             </div>
             <div class="col-12">
                 <button class="btn btn-primary">提交选股任务（异步）</button>
@@ -87,7 +91,7 @@
             {
                 <tr>
                     <td>@g.CreationTime.ToLocalTime().ToString("MM-dd HH:mm")</td>
-                    <td>@(g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing ? "趋势" : "做T") · @g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.ThemePreference</td>
+                    <td>@StockTradeStyleHelper.ToLabel(g.TradeStyle) · @g.ExpectedReturnPct% / @g.HorizonDays 天 · @g.ThemePreference</td>
                     <td>@g.Status</td>
                     <td>@(g.LatestAchievementRate.HasValue ? $"{g.LatestAchievementRate:N1}%" : "-")</td>
                     <td class="text-nowrap">

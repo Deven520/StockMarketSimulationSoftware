@@ -100,7 +100,8 @@ public class AiController : Controller
     public async Task<IActionResult> RefreshGoalProgress(Guid id, CancellationToken ct)
     {
         await _goals.SettleGoalAsync(id, DateTime.Today, ct);
-        TempData["Msg"] = "已刷新今日达成率";
+        await _goals.EvaluateNextDayPicksAsync(id, DateTime.Now, ct);
+        TempData["Msg"] = "已刷新今日达成率与次日命中对账";
         return RedirectToAction(nameof(GoalDetails), new { id });
     }
 

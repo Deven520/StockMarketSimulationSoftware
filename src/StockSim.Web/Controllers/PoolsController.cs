@@ -62,7 +62,8 @@ public class PoolsController : Controller
             peTtm = q.PeTtm,
             pb = q.Pb,
             marketValue = q.MarketValue,
-            unrealizedPnL = q.UnrealizedPnL
+            unrealizedPnL = q.UnrealizedPnL,
+            unrealizedPnLPct = q.UnrealizedPnLPct
         }));
     }
 

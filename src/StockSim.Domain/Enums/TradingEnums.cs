@@ -20,13 +20,30 @@ public enum PoolItemSource
     Ai = 2
 }
 
-/// <summary>股票交易/选股风格：做T vs 趋势波段。</summary>
+/// <summary>股票交易/选股风格：做T vs 趋势波段 vs 次日上涨预选。</summary>
 public enum StockTradeStyle
 {
     /// <summary>做T股：日内高抛低吸（默认，兼容旧数据）。</summary>
     IntradayT = 1,
     /// <summary>趋势股：底部反转/中期趋势观察，不做自动做T。</summary>
-    TrendSwing = 2
+    TrendSwing = 2,
+    /// <summary>次日预涨：结合当日/历史/新闻预选下一交易日偏多标的；池内单独分组，执行同趋势（不做自动做T）。</summary>
+    NextDayRise = 3
+}
+
+/// <summary><see cref="StockTradeStyle"/> 展示与池内映射。</summary>
+public static class StockTradeStyleHelper
+{
+    public static string ToLabel(StockTradeStyle style) => style switch
+    {
+        StockTradeStyle.TrendSwing => "趋势股",
+        StockTradeStyle.NextDayRise => "次日预涨",
+        _ => "做T股"
+    };
+
+    /// <summary>池内执行：次日预涨与趋势股一样不做自动做T（可低位建仓）。</summary>
+    public static bool IsTrendLike(StockTradeStyle style) =>
+        style is StockTradeStyle.TrendSwing or StockTradeStyle.NextDayRise;
 }
 
 public enum AiJobType

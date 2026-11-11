@@ -100,7 +100,7 @@ public class StrategyEngineService
                 symbols.AddRange(poolItems
                     .Where(i => i.StockPoolId == binding.StockPoolId
                                 && i.BoundStrategyId == null
-                                && i.TradeStyle != StockTradeStyle.TrendSwing)
+                                && !StockTradeStyleHelper.IsTrendLike(i.TradeStyle))
                     .Select(i => i.Symbol));
             }
 
@@ -110,8 +110,8 @@ public class StrategyEngineService
                     string.Equals(i.Symbol, symbol, StringComparison.OrdinalIgnoreCase)
                     && (binding.StockPoolId == null || i.StockPoolId == binding.StockPoolId));
 
-                // 趋势股：不走日内做T状态机（观察/跟踪，保留仓位与资金）
-                if (poolItem is { TradeStyle: StockTradeStyle.TrendSwing })
+                // 趋势股/次日预选入库：不走日内做T状态机（观察/跟踪，保留仓位与资金）
+                if (poolItem is not null && StockTradeStyleHelper.IsTrendLike(poolItem.TradeStyle))
                     continue;
 
                 var quote = await _marketData.GetLastAsync(symbol, ct);
@@ -291,7 +291,7 @@ public class StrategyEngineService
         CancellationToken ct)
     {
         var trendItems = poolItems
-            .Where(i => i.TradeStyle == StockTradeStyle.TrendSwing)
+            .Where(i => StockTradeStyleHelper.IsTrendLike(i.TradeStyle))
             .ToList();
         if (trendItems.Count == 0) return 0;
 

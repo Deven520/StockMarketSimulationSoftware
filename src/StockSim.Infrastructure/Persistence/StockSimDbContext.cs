@@ -195,6 +195,8 @@ public class StockSimDbContext : DbContext, IStockSimDataStore
             e.Property(x => x.Name).HasMaxLength(64).IsRequired();
             e.Property(x => x.BaselineCash).HasPrecision(18, 2);
             e.Property(x => x.BaselinePrice).HasPrecision(18, 4);
+            e.Property(x => x.ActualClose).HasPrecision(18, 4);
+            e.Property(x => x.NextDayReturnPct).HasPrecision(18, 4);
             e.HasIndex(x => new { x.InvestmentGoalId, x.Symbol }).IsUnique();
         });
 

@@ -16,7 +16,8 @@ public record StockPoolItemDto(
     decimal InitialCash = 200_000m,
     decimal AvailableCash = 200_000m,
     bool NotifyOnTrade = false,
-    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT);
+    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT,
+    DateTime? PredictedRiseDate = null);
 public record CreateStockPoolRequest(string Name, string? Description);
 public record AddPoolItemRequest(string Symbol, string Name, string? Tags, string? Remark);
 
@@ -56,7 +57,8 @@ public record PoolStockRowDto(
     string? ForecastSource = null,
     decimal? AvgAiAccuracyPct = null,
     decimal? AvgAtrAccuracyPct = null,
-    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT);
+    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT,
+    DateTime? PredictedRiseDate = null);
 
 /// <summary>一股一策 AI 刷新结果（供队列回写 Input/Output / Job 关联）。</summary>
 public record StrategyAiRunResult(
@@ -75,7 +77,8 @@ public record PoolQuoteSnapshotDto(
     decimal? PeTtm,
     decimal? Pb,
     decimal? MarketValue,
-    decimal? UnrealizedPnL);
+    decimal? UnrealizedPnL,
+    decimal? UnrealizedPnLPct = null);
 
 public record StockOperationRowDto(
     DateTime Time,
@@ -319,7 +322,10 @@ public record InvestmentGoalDto(
     decimal? LatestAchievementRate,
     decimal? LatestPortfolioReturnPct,
     DateTime CreationTime,
-    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT);
+    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT,
+    decimal? DirectionHitRatePct = null,
+    decimal? TargetHitRatePct = null,
+    decimal? AvgNextDayReturnPct = null);
 
 public record InvestmentGoalStockDto(
     Guid Id,
@@ -329,7 +335,14 @@ public record InvestmentGoalStockDto(
     decimal BaselineCash,
     string? SelectionLogic = null,
     string? Reason = null,
-    string? Risk = null);
+    string? Risk = null,
+    decimal? BaselinePrice = null,
+    DateTime? TargetTradeDate = null,
+    decimal? ActualClose = null,
+    decimal? NextDayReturnPct = null,
+    bool? DirectionHit = null,
+    bool? TargetHit = null,
+    DateTime? EvaluatedAt = null);
 
 public record GoalProgressDailyDto(
     DateTime TradeDate,

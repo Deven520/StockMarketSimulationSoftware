@@ -50,6 +50,23 @@ public class InvestmentGoalStock : AuditedEntity
 
     /// <summary>入选时参考价（可选）。</summary>
     public decimal? BaselinePrice { get; set; }
+
+    /// <summary>次日预选对账目标日（下一交易日）。</summary>
+    public DateTime? TargetTradeDate { get; set; }
+
+    /// <summary>目标日收盘价（真源日K）。</summary>
+    public decimal? ActualClose { get; set; }
+
+    /// <summary>次日收益%：(ActualClose−BaselinePrice)/BaselinePrice×100。</summary>
+    public decimal? NextDayReturnPct { get; set; }
+
+    /// <summary>方向命中：次日收益 &gt; 0。</summary>
+    public bool? DirectionHit { get; set; }
+
+    /// <summary>目标命中：次日收益 ≥ 目标预期收益%。</summary>
+    public bool? TargetHit { get; set; }
+
+    public DateTime? EvaluatedAt { get; set; }
 }
 
 public class GoalProgressDaily : EntityBase

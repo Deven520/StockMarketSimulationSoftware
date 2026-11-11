@@ -6,7 +6,7 @@
     <h2 class="mb-0">投资目标与达成率</h2>
     <a class="btn btn-primary btn-sm" asp-action="Index">新建目标选股</a>
 </div>
-<p class="text-muted small">达成率 = 组合收益% ÷ 预期收益% × 100（入选股按每股默认资金等权）。</p>
+<p class="text-muted small">达成率 = 组合收益% ÷ 预期收益% × 100（入选股按每股默认资金等权）。次日上涨预选另计方向/目标命中率（目标日收盘后对账）。</p>
 
 <div class="table-responsive">
 <table class="table table-hover align-middle">
@@ -21,20 +21,21 @@
         <th>入选</th>
         <th>组合收益</th>
         <th>达成率</th>
+        <th title="次日上涨预选：方向命中率">次日命中</th>
         <th></th>
     </tr>
     </thead>
     <tbody>
     @if (Model.Count == 0)
     {
-        <tr><td colspan="10" class="text-center text-muted py-4">暂无目标，请先在 AI 工作台创建</td></tr>
+        <tr><td colspan="11" class="text-center text-muted py-4">暂无目标，请先在 AI 工作台创建</td></tr>
     }
     @foreach (var g in Model)
     {
         var rateUp = (g.LatestAchievementRate ?? 0) >= 100;
         <tr>
             <td>@g.CreationTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
-            <td>@(g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing ? "趋势股" : "做T股")</td>
+            <td>@StockSim.Domain.Enums.StockTradeStyleHelper.ToLabel(g.TradeStyle)</td>
             <td>@g.ExpectedReturnPct%</td>
             <td>@g.HorizonDays 天</td>
             <td>@g.ThemePreference</td>
@@ -42,6 +43,17 @@
             <td>@g.StockCount</td>
             <td>@(g.LatestPortfolioReturnPct?.ToString("N2") ?? "-")%</td>
             <td class="@(rateUp ? "text-danger" : "")">@(g.LatestAchievementRate?.ToString("N1") ?? "-")%</td>
+            <td class="small">
+                @if (g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise && g.DirectionHitRatePct.HasValue)
+                {
+                    <span>方向 @g.DirectionHitRatePct?.ToString("N0")%</span>
+                    <span class="text-muted"> / 目标 @(g.TargetHitRatePct?.ToString("N0") ?? "-")%</span>
+                }
+                else
+                {
+                    <span class="text-muted">-</span>
+                }
+            </td>
             <td class="text-nowrap">
                 <a asp-action="GoalDetails" asp-route-id="@g.Id">详情</a>
                 <form asp-action="DeleteGoal" method="post" class="d-inline"

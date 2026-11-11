@@ -45,7 +45,9 @@ public sealed class CursorSdkAiClient : ICursorAiClient
             "严格只输出 JSON：{prompt,rationale,analysis}，不要其它文字。" +
             "本步 JSON 不要直接列股票；但 prompt 字段必须要求下一步输出 3~5 只具体 A 股（含代码/名称/理由/风险），" +
             "且 prompt 中禁止写「不要输出股票代码」。" +
-            "prompt 必须显式包含：预期收益%、预期周期（天）、题材偏好、选股类型（做T股或趋势股）。" +
+            "prompt 必须显式包含：预期收益%、预期周期（天）、题材偏好、选股类型（做T股/趋势股/次日上涨预选）。" +
+            "若 tradeStyle=NextDayRise/次日上涨预选：结合 marketContext 中的热点新闻、下一交易日日期、题材与当日/历史强弱，" +
+            "预选下一交易日更可能上涨的个股；horizon 视为 1 个交易日；不要按日内做T选股。" +
             "若 tradeStyle=TrendSwing/趋势股：强调底部反转或中期趋势观察，不要按日内做T选股；" +
             "若做T股：强调流动性与适中波动、适合高抛低吸。" +
             goalSummary;
