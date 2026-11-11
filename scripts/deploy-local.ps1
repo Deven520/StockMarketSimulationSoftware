@@ -8,6 +8,8 @@
   - Write absolute-path appsettings (shared SQLite, repo data/)
   - Copy Alerts (Enabled / Webhook / PushPlus) from src\StockSim.Web\appsettings.json to Web+Worker
   - If stocksim.db exists: keep or reset (or -KeepDatabase / -ResetDatabase)
+  - Optional: copy test DB src\StockSim.Web\stocksim.db over deploy DB
+    (-SeedFromTestDatabase / -SkipSeedFromTestDatabase)
   - Optional: start both processes
 
 .EXAMPLE
@@ -15,6 +17,7 @@
   .\scripts\deploy-local.ps1 -Start
   .\scripts\deploy-local.ps1 -KeepDatabase -Start
   .\scripts\deploy-local.ps1 -ResetDatabase -Start
+  .\scripts\deploy-local.ps1 -SeedFromTestDatabase -Start
   .\scripts\deploy-local.ps1 -SkipBuild -Start
 #>
 
@@ -24,6 +27,8 @@ param(
     [switch]$SkipBuild,
     [switch]$KeepDatabase,
     [switch]$ResetDatabase,
+    [switch]$SeedFromTestDatabase,
+    [switch]$SkipSeedFromTestDatabase,
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$HttpUrl = "http://localhost:5167"
@@ -33,6 +38,9 @@ $ErrorActionPreference = "Stop"
 
 if ($KeepDatabase -and $ResetDatabase) {
     throw "Cannot use -KeepDatabase and -ResetDatabase together."
+}
+if ($SeedFromTestDatabase -and $SkipSeedFromTestDatabase) {
+    throw "Cannot use -SeedFromTestDatabase and -SkipSeedFromTestDatabase together."
 }
 
 function Get-RepoRoot {
@@ -156,6 +164,63 @@ function Resolve-DatabaseChoice {
     return "keep"
 }
 
+function Resolve-SeedFromTestDatabaseChoice {
+    param(
+        [bool]$TestDbExists,
+        [switch]$SeedFromTestDatabase,
+        [switch]$SkipSeedFromTestDatabase
+    )
+
+    if ($SeedFromTestDatabase -and -not $TestDbExists) {
+        throw "Seed requested (-SeedFromTestDatabase) but test DB missing: src\StockSim.Web\stocksim.db"
+    }
+
+    if (-not $TestDbExists) {
+        return $false
+    }
+
+    if ($SeedFromTestDatabase) { return $true }
+    if ($SkipSeedFromTestDatabase) { return $false }
+
+    Write-Host ""
+    Write-Host "Test database found: src\StockSim.Web\stocksim.db" -ForegroundColor Yellow
+    Write-Host "  [Y] Overwrite deploy DB (publish\web\stocksim.db) with test DB" -ForegroundColor Cyan
+    Write-Host "  [N] Do not overwrite" -ForegroundColor Cyan
+    $ans = Read-Host "Overwrite deploy DB from test DB? [Y/N] (Enter = N)"
+    if ($ans -match '^[Yy]') {
+        return $true
+    }
+    return $false
+}
+
+function Copy-SqliteDatabase {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceDb,
+        [Parameter(Mandatory = $true)][string]$DestDb
+    )
+
+    $destDir = Split-Path -Parent $DestDb
+    if (-not (Test-Path -LiteralPath $destDir)) {
+        New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+    }
+
+    foreach ($suffix in @("-wal", "-shm")) {
+        $side = "$DestDb$suffix"
+        if (Test-Path -LiteralPath $side) {
+            Remove-Item -LiteralPath $side -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Copy-Item -LiteralPath $SourceDb -Destination $DestDb -Force
+
+    foreach ($suffix in @("-wal", "-shm")) {
+        $srcSide = "$SourceDb$suffix"
+        if (Test-Path -LiteralPath $srcSide) {
+            Copy-Item -LiteralPath $srcSide -Destination "$DestDb$suffix" -Force
+        }
+    }
+}
+
 $repoRoot = Get-RepoRoot
 Set-Location $repoRoot
 Write-Host "Repo root: $repoRoot" -ForegroundColor Cyan
@@ -170,11 +235,20 @@ $dataReplay = Join-Path $repoRoot "data\replay"
 $dataAi = Join-Path $repoRoot "data\ai"
 $dbPath = Join-Path $webOut "stocksim.db"
 $dbBackup = Join-Path $publishRoot "stocksim.db.bak"
+$testDbPath = Join-Path $repoRoot "src\StockSim.Web\stocksim.db"
 
 New-Item -ItemType Directory -Force -Path $publishRoot, $dataReplay, $dataAi | Out-Null
 
 $hadExistingDb = Test-Path $dbPath
 $dbChoice = Resolve-DatabaseChoice -HadExistingDb $hadExistingDb -KeepDatabase:$KeepDatabase -ResetDatabase:$ResetDatabase
+$seedFromTest = Resolve-SeedFromTestDatabaseChoice `
+    -TestDbExists:(Test-Path -LiteralPath $testDbPath) `
+    -SeedFromTestDatabase:$SeedFromTestDatabase `
+    -SkipSeedFromTestDatabase:$SkipSeedFromTestDatabase
+
+if (-not (Test-Path -LiteralPath $testDbPath)) {
+    Write-Host "No test DB at src\StockSim.Web\stocksim.db (skip seed prompt)." -ForegroundColor DarkGray
+}
 
 if (-not $SkipBuild) {
     if ($hadExistingDb) {
@@ -214,7 +288,19 @@ else {
     if (-not (Test-Path (Join-Path $workerOut "StockSim.Worker.dll"))) {
         throw "Published Worker not found. Run without -SkipBuild first."
     }
-    Write-Host "SkipBuild: using existing publish/ (DB unchanged)." -ForegroundColor Yellow
+    Write-Host "SkipBuild: using existing publish/." -ForegroundColor Yellow
+}
+
+if ($seedFromTest) {
+    if (-not (Test-Path -LiteralPath $testDbPath)) {
+        throw "Seed requested but test DB missing: $testDbPath"
+    }
+    if (Test-Path -LiteralPath $dbPath) {
+        Write-Host "Backing up deploy DB before seed: $dbBackup" -ForegroundColor Cyan
+        Copy-Item -LiteralPath $dbPath -Destination $dbBackup -Force
+    }
+    Copy-SqliteDatabase -SourceDb $testDbPath -DestDb $dbPath
+    Write-Host "Seeded deploy DB from test DB: $dbPath" -ForegroundColor Green
 }
 
 # Alerts：以 Web 源配置为准，同步写入 Web + Worker 发布目录（成交通知主要靠 Worker）
@@ -305,6 +391,7 @@ Start:  .\scripts\start-local.ps1
 Stop:   .\scripts\stop-local.ps1
 
 DB: on full republish choose Keep(K) or Reset(R); or -KeepDatabase / -ResetDatabase.
+Seed: optional overwrite from src\StockSim.Web\stocksim.db [Y/N]; or -SeedFromTestDatabase / -SkipSeedFromTestDatabase.
 Alerts: copied from src\StockSim.Web\appsettings.json into publish\web and publish\worker.
 Site is open (no login).
 "@
@@ -318,6 +405,7 @@ if (-not $SkipBuild) {
     $policyLabel = if ($dbChoice -eq "keep") { "keep" } elseif ($dbChoice -eq "reset") { "reset" } else { "new" }
     Write-Host "DB policy: $policyLabel"
 }
+Write-Host ("DB seed from test: {0}" -f $(if ($seedFromTest) { "yes" } else { "no" }))
 Write-Host "URL:     $HttpUrl"
 
 if ($Start) {

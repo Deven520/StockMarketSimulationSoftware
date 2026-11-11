@@ -1,10 +1,10 @@
 # StockSim — A股模拟做T系统
 
-基于 `docs/` 中的需求、技术实现与落地文档生成的可运行项目。
+基于 `docs/` 中的需求、技术实现、落地与数据库文档生成的可运行项目。
 
 > **模拟交易，非实盘投资建议。**
 
-文档版本与实现对齐：**V1.1**（`docs/需求文档.md`、`docs/技术实现文档.md`、`docs/落地实施文档.md`）。
+文档：`docs/需求文档.md`、`docs/技术实现文档.md`、`docs/落地实施文档.md`、`docs/数据库文档.md`（表结构与写库操作；**库变更须同步**）。
 
 ## 技术栈
 
@@ -25,7 +25,7 @@
 
 ```
 StockSim.slnx
-├── docs/                          需求 / 技术 / 落地文档
+├── docs/                          需求 / 技术 / 落地 / 数据库文档
 ├── src/
 │   ├── StockSim.Domain            实体、费用、风控、撮合、策略评估、开市判断
 │   ├── StockSim.Application       应用服务、DTO
@@ -50,6 +50,13 @@ StockSim.slnx
 ```
 
 脚本会：检查 .NET SDK → 发布到 `publish\web` / `publish\worker` → 写入共用 SQLite 绝对路径 → 启动 Web + Worker → 打开浏览器。
+
+发布时若已有部署库，询问 **保留(K) / 重建(R)**；若存在测试库 `src\StockSim.Web\stocksim.db`，再询问是否 **用测试库覆盖部署库 [Y/N]**（默认 N）。也可：
+
+```powershell
+.\scripts\deploy-local.ps1 -KeepDatabase -SeedFromTestDatabase -Start
+.\scripts\deploy-local.ps1 -SkipSeedFromTestDatabase -Start
+```
 
 | 脚本 | 作用 |
 |------|------|

@@ -4,7 +4,9 @@ cd /d "%~dp0.."
 echo ========================================
 echo   StockSim one-click deploy
 echo ========================================
-echo If DB exists, you will be asked Keep(K) or Reset(R).
+echo If deploy DB exists, you will be asked Keep(K) or Reset(R).
+echo If test DB exists (src\StockSim.Web\stocksim.db), you will be asked
+echo whether to overwrite deploy DB with test data [Y/N] (default N).
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy-local.ps1" -Start
