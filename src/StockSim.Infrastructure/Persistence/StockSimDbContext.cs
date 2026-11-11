@@ -29,6 +29,7 @@ public class StockSimDbContext : DbContext, IStockSimDataStore
     public DbSet<InvestmentGoalStock> InvestmentGoalStocks => Set<InvestmentGoalStock>();
     public DbSet<GoalProgressDaily> GoalProgressDailies => Set<GoalProgressDaily>();
     public DbSet<PriceRangeForecast> PriceRangeForecasts => Set<PriceRangeForecast>();
+    public DbSet<DownsideRiskForecast> DownsideRiskForecasts => Set<DownsideRiskForecast>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -229,6 +230,25 @@ public class StockSimDbContext : DbContext, IStockSimDataStore
             e.HasIndex(x => new { x.Symbol, x.ForecastForDate });
             e.HasIndex(x => new { x.Symbol, x.ForecastForDate, x.Source });
             e.HasIndex(x => new { x.Status, x.ForecastForDate });
+        });
+
+        modelBuilder.Entity<DownsideRiskForecast>(e =>
+        {
+            e.ToTable("AppDownsideRiskForecasts");
+            e.Property(x => x.Symbol).HasMaxLength(16).IsRequired();
+            e.Property(x => x.Name).HasMaxLength(64).IsRequired();
+            e.Property(x => x.SessionPhase).HasMaxLength(32);
+            e.Property(x => x.SuggestAction).HasMaxLength(32);
+            e.Property(x => x.Source).HasMaxLength(16);
+            e.Property(x => x.DownsideProbPct).HasPrecision(18, 2);
+            e.Property(x => x.ExpectedDropPct).HasPrecision(18, 4);
+            e.Property(x => x.BaselinePrice).HasPrecision(18, 4);
+            e.Property(x => x.ActualClose).HasPrecision(18, 4);
+            e.Property(x => x.NextDayReturnPct).HasPrecision(18, 4);
+            e.HasIndex(x => new { x.Symbol, x.PredictedForDate });
+            e.HasIndex(x => new { x.StockPoolItemId, x.PredictedForDate });
+            e.HasIndex(x => x.AiQueueItemId);
+            e.HasIndex(x => new { x.Status, x.PredictedForDate });
         });
     }
 }

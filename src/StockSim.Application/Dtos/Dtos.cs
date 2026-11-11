@@ -58,7 +58,33 @@ public record PoolStockRowDto(
     decimal? AvgAiAccuracyPct = null,
     decimal? AvgAtrAccuracyPct = null,
     StockTradeStyle TradeStyle = StockTradeStyle.IntradayT,
-    DateTime? PredictedRiseDate = null);
+    DateTime? PredictedRiseDate = null,
+    DownsideRiskLevel? RiskLevel = null,
+    string? RiskStatus = null,
+    DateTime? RiskPredictedForDate = null,
+    DateTime? RiskAssessedAt = null,
+    decimal? RiskExpectedDropPct = null,
+    string? RiskSuggestAction = null,
+    string? RiskReason = null,
+    decimal? RiskDirectionHitRatePct = null,
+    decimal? RiskStrongHitRatePct = null,
+    int RiskEvalCount = 0);
+
+/// <summary>池列表风险预警摘要。</summary>
+public record DownsideRiskSummaryDto(
+    DownsideRiskLevel RiskLevel,
+    DownsideRiskStatus Status,
+    DateTime PredictedForDate,
+    DateTime AssessedAt,
+    decimal? ExpectedDropPct,
+    decimal? DownsideProbPct,
+    string? SuggestAction,
+    string? Reason,
+    bool HasSellableQty,
+    string Source,
+    decimal? DirectionHitRatePct,
+    decimal? StrongHitRatePct,
+    int EvalCount);
 
 /// <summary>一股一策 AI 刷新结果（供队列回写 Input/Output / Job 关联）。</summary>
 public record StrategyAiRunResult(

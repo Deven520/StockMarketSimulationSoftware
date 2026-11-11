@@ -21,6 +21,7 @@ public static class DbInitializer
         await EnsureStrategyRuntimeTablesAsync(db, logger);
         await EnsureInvestmentGoalTablesAsync(db, logger);
         await EnsurePriceRangeForecastTableAsync(db, logger);
+        await EnsureDownsideRiskForecastTableAsync(db, logger);
         await EnsureAiQueueTableAsync(db, logger);
 
         if (await db.Accounts.AnyAsync())
@@ -337,6 +338,63 @@ public static class DbInitializer
         catch (Exception ex)
         {
             logger.LogWarning(ex, "EnsureInvestmentGoalTables skipped or partial");
+        }
+    }
+
+    private static async Task EnsureDownsideRiskForecastTableAsync(StockSimDbContext db, ILogger logger)
+    {
+        try
+        {
+            var provider = db.Database.ProviderName ?? string.Empty;
+            if (!provider.Contains("Sqlite", StringComparison.OrdinalIgnoreCase)) return;
+
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS AppDownsideRiskForecasts (
+                    Id TEXT NOT NULL PRIMARY KEY,
+                    CreationTime TEXT NOT NULL,
+                    StockPoolItemId TEXT NULL,
+                    Symbol TEXT NOT NULL,
+                    Name TEXT NOT NULL,
+                    PredictedForDate TEXT NOT NULL,
+                    AssessedAt TEXT NOT NULL,
+                    SessionPhase TEXT NULL,
+                    RiskLevel INTEGER NOT NULL,
+                    Status INTEGER NOT NULL,
+                    DownsideProbPct TEXT NULL,
+                    ExpectedDropPct TEXT NULL,
+                    SuggestAction TEXT NULL,
+                    Reason TEXT NULL,
+                    EvidenceJson TEXT NULL,
+                    BaselinePrice TEXT NULL,
+                    PositionQty INTEGER NOT NULL DEFAULT 0,
+                    SellableQuantity INTEGER NOT NULL DEFAULT 0,
+                    HasSellableQty INTEGER NOT NULL DEFAULT 0,
+                    AiQueueItemId TEXT NULL,
+                    Source TEXT NOT NULL DEFAULT 'hybrid',
+                    ActualClose TEXT NULL,
+                    NextDayReturnPct TEXT NULL,
+                    DirectionHit INTEGER NULL,
+                    StrongHit INTEGER NULL,
+                    EvaluatedAt TEXT NULL,
+                    ErrorMessage TEXT NULL
+                );
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE INDEX IF NOT EXISTS IX_AppDownsideRiskForecasts_Symbol_PredictedForDate
+                ON AppDownsideRiskForecasts (Symbol, PredictedForDate);
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE INDEX IF NOT EXISTS IX_AppDownsideRiskForecasts_Status_PredictedForDate
+                ON AppDownsideRiskForecasts (Status, PredictedForDate);
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE INDEX IF NOT EXISTS IX_AppDownsideRiskForecasts_AiQueueItemId
+                ON AppDownsideRiskForecasts (AiQueueItemId);
+                """);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "EnsureDownsideRiskForecastTable skipped or partial");
         }
     }
 

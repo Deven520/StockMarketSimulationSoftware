@@ -31,6 +31,7 @@ public static class DependencyInjection
         services.AddScoped<InvestmentGoalAppService>();
         services.AddScoped<AiQueueAppService>();
         services.AddHostedService<AiQueueHostedService>();
+        services.AddScoped<DownsideRiskAppService>();
         services.AddScoped<StrategyEngineService>();
         services.AddScoped<StockDetailAppService>();
 

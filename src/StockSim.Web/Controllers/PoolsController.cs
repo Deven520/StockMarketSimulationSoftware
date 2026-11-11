@@ -14,6 +14,7 @@ public class PoolsController : Controller
     private readonly StockDetailAppService _stockDetails;
     private readonly PerStockStrategyService _perStock;
     private readonly AiQueueAppService _aiQueue;
+    private readonly DownsideRiskAppService _downsideRisk;
     private readonly IStockSuggestProvider _suggest;
     private readonly ITradeAlertNotifier _alerts;
     private readonly IStockSimDataStore _db;
@@ -23,6 +24,7 @@ public class PoolsController : Controller
         StockDetailAppService stockDetails,
         PerStockStrategyService perStock,
         AiQueueAppService aiQueue,
+        DownsideRiskAppService downsideRisk,
         IStockSuggestProvider suggest,
         ITradeAlertNotifier alerts,
         IStockSimDataStore db)
@@ -31,6 +33,7 @@ public class PoolsController : Controller
         _stockDetails = stockDetails;
         _perStock = perStock;
         _aiQueue = aiQueue;
+        _downsideRisk = downsideRisk;
         _suggest = suggest;
         _alerts = alerts;
         _db = db;
@@ -145,6 +148,19 @@ public class PoolsController : Controller
         if (string.Equals(returnTo, "stock", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(symbol))
             return RedirectToAction(nameof(Stock), new { symbol, poolId });
         return RedirectToAction("Queue", "Ai", new { highlight = q.Id });
+    }
+
+    /// <summary>预测下一交易日下跌风险（入队；规则快检 + AI；开市/非开市均可）。</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> PredictDownsideRisk(Guid poolId, Guid itemId, CancellationToken ct)
+    {
+        var result = await _downsideRisk.EnqueuePredictAsync(itemId, ct);
+        TempData["Msg"] = result.Message;
+        TempData["MsgType"] = result.Ok ? "success" : "warning";
+        if (result.Ok && result.QueueId.HasValue)
+            return RedirectToAction("Queue", "Ai", new { highlight = result.QueueId.Value });
+        return RedirectToAction(nameof(Index));
     }
 
     /// <summary>手动全池 AI 策略刷新（入队，由后台串行执行）。</summary>

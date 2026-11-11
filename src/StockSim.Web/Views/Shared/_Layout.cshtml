@@ -31,7 +31,7 @@
         </div>
     </nav>
 </header>
-<div class="container">
+<div class="@(ViewData["WideContent"] is true ? "container-fluid px-3 px-lg-4" : "container")">
     @if (TempData["Msg"] != null)
     {
         var msgType = TempData["MsgType"] as string ?? "info";

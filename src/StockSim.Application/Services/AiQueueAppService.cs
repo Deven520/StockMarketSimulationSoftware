@@ -14,6 +14,7 @@ public sealed class AiQueueAppService
     private readonly IStockSimDataStore _db;
     private readonly InvestmentGoalAppService _goals;
     private readonly PerStockStrategyService _perStock;
+    private readonly DownsideRiskAppService _downsideRisk;
     private readonly ILogger<AiQueueAppService> _logger;
     private static readonly string WorkerId =
         $"{Environment.MachineName}:{Environment.ProcessId}";
@@ -22,11 +23,13 @@ public sealed class AiQueueAppService
         IStockSimDataStore db,
         InvestmentGoalAppService goals,
         PerStockStrategyService perStock,
+        DownsideRiskAppService downsideRisk,
         ILogger<AiQueueAppService> logger)
     {
         _db = db;
         _goals = goals;
         _perStock = perStock;
+        _downsideRisk = downsideRisk;
         _logger = logger;
     }
 
@@ -193,6 +196,9 @@ public sealed class AiQueueAppService
                 break;
             case AiQueueTaskType.StrategyRefresh:
                 await ProcessStrategyRefreshAsync(item, ct);
+                break;
+            case AiQueueTaskType.DownsideRiskPredict:
+                await _downsideRisk.ProcessQueuedAsync(item, ct);
                 break;
             default:
                 throw new InvalidOperationException($"未知队列任务类型 {item.TaskType}");

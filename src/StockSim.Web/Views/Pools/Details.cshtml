@@ -1,6 +1,7 @@
 @model IReadOnlyList<StockSim.Application.Dtos.PoolStockRowDto>
 @using StockSim.Domain.Strategies
 @{
+    ViewData["WideContent"] = true;
     Guid poolId = ViewBag.PoolId;
     var poolName = (string)(ViewBag.PoolName ?? "股票池");
     var session = Model.FirstOrDefault()?.MarketSessionText ?? "-";
@@ -70,7 +71,7 @@
     </div>
 </div>
 
-<div class="table-responsive">
+<div class="pool-table-shell">
 <table class="table table-sm table-hover align-middle stock-pool-table" id="poolTable" data-pool-id="@poolId">
     <thead class="table-dark">
         <tr>
@@ -89,8 +90,9 @@
             <th title="目标日高低价预测（交易日15:00前=当日，否则下一交易日）；括号内为近史AI/ATR准确率">@forecastCol</th>
             <th>专属策略</th>
             <th>策略状态</th>
+            <th title="操作「预测风险」：下一交易日下跌风险；括号内为近史方向命中率">次日风险</th>
             <th>成交通知</th>
-            <th></th>
+            <th class="pool-actions-col">操作</th>
         </tr>
     </thead>
     <tbody>
@@ -109,7 +111,7 @@
             <td>
                 <a asp-action="Stock" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId" class="fw-semibold text-decoration-none">@i.Symbol</a>
             </td>
-            <td>@i.Name</td>
+            <td class="pool-col-name">@i.Name</td>
             <td>
                 @if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
                 {
@@ -146,7 +148,7 @@
             <td class="js-upnl text-muted">…</td>
             <td class="@(dayUp ? "text-danger" : "text-success")">@(i.TodayRealizedPnL?.ToString("N2") ?? "-")</td>
             <td>@i.AvailableCash.ToString("N0")</td>
-            <td class="small">
+            <td class="small pool-col-wrap">
                 @if (i.PredictedHigh.HasValue && i.PredictedLow.HasValue)
                 {
                     <div class="fw-semibold">@i.PredictedHigh.Value.ToString("N2") / @i.PredictedLow.Value.ToString("N2")</div>
@@ -161,7 +163,7 @@
                     <span class="text-muted">暂无</span>
                 }
             </td>
-            <td class="small">
+            <td class="small pool-col-wrap">
                 @if (i.BoundStrategyId.HasValue)
                 {
                     <div>@(i.StrategyName ?? i.BoundStrategyId.Value.ToString()[..8])</div>
@@ -201,6 +203,50 @@
                     }
                 }
             </td>
+            <td class="small pool-col-wrap">
+                @if (string.Equals(i.RiskStatus, "Pending", StringComparison.OrdinalIgnoreCase))
+                {
+                    <span class="badge bg-secondary">预测中…</span>
+                    <div class="text-muted">@(i.RiskPredictedForDate?.ToString("MM-dd") ?? "-")</div>
+                }
+                else if (i.RiskLevel.HasValue)
+                {
+                    var riskCls = i.RiskLevel.Value switch
+                    {
+                        StockSim.Domain.Enums.DownsideRiskLevel.High => "bg-danger",
+                        StockSim.Domain.Enums.DownsideRiskLevel.Medium => "bg-warning text-dark",
+                        _ => "bg-success"
+                    };
+                    var riskLabel = i.RiskLevel.Value switch
+                    {
+                        StockSim.Domain.Enums.DownsideRiskLevel.High => "高风险",
+                        StockSim.Domain.Enums.DownsideRiskLevel.Medium => "中风险",
+                        _ => "低风险"
+                    };
+                    <div>
+                        <span class="badge @riskCls" title="@(i.RiskReason ?? "")">@riskLabel</span>
+                        @if (!string.IsNullOrWhiteSpace(i.RiskSuggestAction))
+                        {
+                            <span class="text-muted ms-1">@i.RiskSuggestAction</span>
+                        }
+                    </div>
+                    <div class="text-muted">
+                        @(i.RiskPredictedForDate?.ToString("MM-dd") ?? "-")
+                        @if (i.RiskExpectedDropPct.HasValue)
+                        {
+                            <span>· 预期 @i.RiskExpectedDropPct.Value.ToString("N1")%</span>
+                        }
+                    </div>
+                    @if (i.RiskEvalCount > 0 && i.RiskDirectionHitRatePct.HasValue)
+                    {
+                        <div class="text-muted">命中 @i.RiskDirectionHitRatePct.Value.ToString("N0")% / 强 @(i.RiskStrongHitRatePct?.ToString("N0") ?? "-")%（@i.RiskEvalCount）</div>
+                    }
+                }
+                else
+                {
+                    <span class="text-muted">-</span>
+                }
+            </td>
             <td>
                 <form asp-action="SetNotifyOnTrade" method="post" class="d-inline">
                     @Html.AntiForgeryToken()
@@ -221,19 +267,43 @@
                     <button type="submit" class="btn btn-sm btn-outline-info" title="用该股信息发一条测试推送">测试</button>
                 </form>
             </td>
-            <td class="text-nowrap">
-                <a class="btn btn-sm btn-outline-info" asp-action="Operations" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId">明细</a>
-                <a class="btn btn-sm btn-outline-primary" asp-action="Stock" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId">行情</a>
-                <form asp-action="RefreshStrategy" method="post" class="d-inline">
-                    <input type="hidden" name="poolId" value="@poolId" />
-                    <input type="hidden" name="itemId" value="@i.Id" />
-                    <button class="btn btn-sm btn-outline-warning" title="立即用行情+热点新闻刷新专属策略">AI刷新</button>
-                </form>
-                <form asp-action="RemoveItem" method="post" class="d-inline">
-                    <input type="hidden" name="poolId" value="@poolId" />
-                    <input type="hidden" name="itemId" value="@i.Id" />
-                    <button class="btn btn-sm btn-outline-danger">移除</button>
-                </form>
+            <td class="pool-actions-col">
+                <div class="pool-row-actions">
+                    <button type="button"
+                            class="btn btn-sm btn-outline-secondary pool-actions-toggle"
+                            aria-expanded="false"
+                            title="更多操作">
+                        操作
+                    </button>
+                    <div class="pool-actions-menu shadow border rounded bg-white">
+                        <a class="pool-actions-item" asp-action="Operations" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId">明细</a>
+                        <a class="pool-actions-item" asp-action="Stock" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId">行情</a>
+                        <div class="pool-actions-sep"></div>
+                        <form asp-action="PredictDownsideRisk" method="post">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="poolId" value="@poolId" />
+                            <input type="hidden" name="itemId" value="@i.Id" />
+                            <button type="submit"
+                                    class="pool-actions-item text-danger"
+                                    title="预测下一交易日下跌风险（规则+AI）；开市可辅助当日提前减仓，非开市用于次日决策">
+                                预测风险
+                            </button>
+                        </form>
+                        <form asp-action="RefreshStrategy" method="post">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="poolId" value="@poolId" />
+                            <input type="hidden" name="itemId" value="@i.Id" />
+                            <button type="submit" class="pool-actions-item text-warning" title="立即用行情+热点新闻刷新专属策略">AI刷新</button>
+                        </form>
+                        <form asp-action="RemoveItem" method="post"
+                              onsubmit="return confirm('确认从股票池移除 @i.Name（@i.Symbol）？');">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="poolId" value="@poolId" />
+                            <input type="hidden" name="itemId" value="@i.Id" />
+                            <button type="submit" class="pool-actions-item text-danger">移除</button>
+                        </form>
+                    </div>
+                </div>
             </td>
         </tr>
     }
@@ -396,5 +466,72 @@
     let savedFilter = 'all';
     try { savedFilter = localStorage.getItem(styleFilterKey) || 'all'; } catch { /* ignore */ }
     applyStyleFilter(savedFilter);
+
+    // 操作菜单：挂到 body + fixed，避免 overflow/sticky 裁剪或点不开
+    let activeMenu = null;
+    let activeToggle = null;
+    let activeHome = null;
+
+    function closeActionMenu() {
+        if (!activeMenu) return;
+        activeMenu.classList.remove('is-open');
+        activeMenu.style.top = '';
+        activeMenu.style.left = '';
+        if (activeHome) activeHome.appendChild(activeMenu);
+        if (activeToggle) activeToggle.setAttribute('aria-expanded', 'false');
+        activeMenu = null;
+        activeToggle = null;
+        activeHome = null;
+    }
+
+    function openActionMenu(toggle, menu, home) {
+        closeActionMenu();
+        activeToggle = toggle;
+        activeMenu = menu;
+        activeHome = home;
+        document.body.appendChild(menu);
+        toggle.setAttribute('aria-expanded', 'true');
+        menu.classList.add('is-open');
+
+        const rect = toggle.getBoundingClientRect();
+        const menuWidth = Math.max(menu.offsetWidth || 128, 128);
+        const left = Math.min(
+            Math.max(8, rect.right - menuWidth),
+            window.innerWidth - menuWidth - 8);
+        let top = rect.bottom + 4;
+        const h = menu.offsetHeight || 160;
+        if (top + h > window.innerHeight - 8) {
+            top = Math.max(8, rect.top - h - 4);
+        }
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+    }
+
+    table.addEventListener('click', e => {
+        const toggle = e.target.closest('.pool-actions-toggle');
+        if (!toggle || !table.contains(toggle)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeToggle === toggle) {
+            closeActionMenu();
+            return;
+        }
+        const home = toggle.closest('.pool-row-actions');
+        if (!home) return;
+        const menu = home.querySelector('.pool-actions-menu')
+            || (activeHome === home ? activeMenu : null);
+        if (!menu) return;
+        openActionMenu(toggle, menu, home);
+    });
+
+    document.addEventListener('click', e => {
+        if (e.target.closest('.pool-actions-menu') || e.target.closest('.pool-actions-toggle')) return;
+        closeActionMenu();
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeActionMenu();
+    });
+    window.addEventListener('scroll', closeActionMenu, true);
+    window.addEventListener('resize', closeActionMenu);
 })();
 </script>

@@ -80,7 +80,26 @@ public enum AiQueueTaskType
 {
     GoalToPrompt = 1,
     StockPick = 2,
-    StrategyRefresh = 3
+    StrategyRefresh = 3,
+    /// <summary>池内单股：开市时段预测下一交易日下跌风险。</summary>
+    DownsideRiskPredict = 4
+}
+
+/// <summary>次日下跌风险等级。</summary>
+public enum DownsideRiskLevel
+{
+    Low = 1,
+    Medium = 2,
+    High = 3
+}
+
+/// <summary>风险预测记录状态。</summary>
+public enum DownsideRiskStatus
+{
+    Pending = 0,
+    Ready = 1,
+    Failed = 2,
+    Evaluated = 3
 }
 
 /// <summary>统一 AI 队列项状态。</summary>

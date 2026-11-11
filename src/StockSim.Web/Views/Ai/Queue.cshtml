@@ -17,6 +17,7 @@
         AiQueueTaskType.GoalToPrompt => "目标→提示词",
         AiQueueTaskType.StockPick => "选股",
         AiQueueTaskType.StrategyRefresh => "策略刷新",
+        AiQueueTaskType.DownsideRiskPredict => "预测风险",
         _ => t.ToString()
     };
     string StatusName(AiQueueItemStatus s) => s switch

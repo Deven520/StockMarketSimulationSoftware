@@ -29,8 +29,12 @@ public sealed class DailySettlementWorker : BackgroundService
                     await pnl.SettleAsync(now.Date, stoppingToken);
                     var goals = scope.ServiceProvider.GetRequiredService<InvestmentGoalAppService>();
                     await goals.SettleAllActiveAsync(now.Date, stoppingToken);
+                    var risk = scope.ServiceProvider.GetRequiredService<DownsideRiskAppService>();
+                    var riskN = await risk.EvaluatePendingAsync(now, stoppingToken);
                     _lastSettled = now.Date;
-                    _logger.LogInformation("Daily settlement + goal progress done for {Date}", now.Date);
+                    _logger.LogInformation(
+                        "Daily settlement + goal progress + downside risk eval({RiskN}) done for {Date}",
+                        riskN, now.Date);
                 }
                 catch (Exception ex)
                 {

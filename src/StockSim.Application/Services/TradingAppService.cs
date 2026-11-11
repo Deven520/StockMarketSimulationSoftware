@@ -28,6 +28,7 @@ public interface IStockSimDataStore
     DbSet<InvestmentGoalStock> InvestmentGoalStocks { get; }
     DbSet<GoalProgressDaily> GoalProgressDailies { get; }
     DbSet<PriceRangeForecast> PriceRangeForecasts { get; }
+    DbSet<DownsideRiskForecast> DownsideRiskForecasts { get; }
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }
 

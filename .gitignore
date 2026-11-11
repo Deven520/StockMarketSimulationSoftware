@@ -6,6 +6,7 @@ obj/
 *.userosscache
 *.sln.docstates
 .vs/
+*.pdb
 *.db
 *.db-shm
 *.db-wal
@@ -15,6 +16,9 @@ app.db
 # 团队共享调试库（仅主库；不含 -wal/-shm）
 !src/StockSim.Web/stocksim.db
 
+## Local publish output (deploy via scripts, do not version binaries)
+publish/
+
 ## Secrets / local
 **/appsettings.*.local.json
 **/appsettings.Cursor.local.json
@@ -23,6 +27,7 @@ secrets/
 data/ai/.cursor-api-key
 data/ai/*_response_*.json
 data/ai/*_request_*.json
+data/ai/*.stamp
 !data/ai/.gitkeep
 
 ## Cursor Agent bridge

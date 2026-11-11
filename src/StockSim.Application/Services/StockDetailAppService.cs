@@ -13,15 +13,18 @@ public class StockDetailAppService
     private readonly IStockSimDataStore _db;
     private readonly IStockDetailProvider _detailProvider;
     private readonly CachedLightQuoteService _quotes;
+    private readonly DownsideRiskAppService _downsideRisk;
 
     public StockDetailAppService(
         IStockSimDataStore db,
         IStockDetailProvider detailProvider,
-        CachedLightQuoteService quotes)
+        CachedLightQuoteService quotes,
+        DownsideRiskAppService downsideRisk)
     {
         _db = db;
         _detailProvider = detailProvider;
         _quotes = quotes;
+        _downsideRisk = downsideRisk;
     }
 
     /// <summary>首屏：仅库内持仓/策略/今日盈亏，行情字段留空由前端异步刷。</summary>
@@ -106,6 +109,8 @@ public class StockDetailAppService
                 g => Math.Round(g.Average(ScoredCombined), 1),
                 StringComparer.OrdinalIgnoreCase);
 
+        var riskBySymbol = await _downsideRisk.GetLatestBySymbolsAsync(symbols, ct);
+
         var boundSymbolSet = items
             .Where(i => i.BoundStrategyId.HasValue)
             .Select(i => i.Symbol)
@@ -150,6 +155,7 @@ public class StockDetailAppService
             forecastBySymbol.TryGetValue(item.Symbol, out var fc);
             aiAvgBySymbol.TryGetValue(item.Symbol, out var aiAvg);
             atrAvgBySymbol.TryGetValue(item.Symbol, out var atrAvg);
+            riskBySymbol.TryGetValue(item.Symbol, out var risk);
             string statusText;
             if (isNextDay)
             {
@@ -205,7 +211,17 @@ public class StockDetailAppService
                 aiAvgBySymbol.ContainsKey(item.Symbol) ? aiAvg : null,
                 atrAvgBySymbol.ContainsKey(item.Symbol) ? atrAvg : null,
                 item.TradeStyle,
-                item.PredictedRiseDate));
+                item.PredictedRiseDate,
+                risk is { Status: DownsideRiskStatus.Pending } ? null : risk?.RiskLevel,
+                risk?.Status.ToString(),
+                risk?.PredictedForDate,
+                risk?.AssessedAt,
+                risk is { Status: DownsideRiskStatus.Pending } ? null : risk?.ExpectedDropPct,
+                risk is { Status: DownsideRiskStatus.Pending } ? null : risk?.SuggestAction,
+                risk is { Status: DownsideRiskStatus.Pending } ? null : risk?.Reason,
+                risk?.DirectionHitRatePct,
+                risk?.StrongHitRatePct,
+                risk?.EvalCount ?? 0));
         }
 
         return rows;
