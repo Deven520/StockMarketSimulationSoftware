@@ -12,6 +12,8 @@ obj/
 identity.db
 stocksim.db
 app.db
+# 团队共享调试库（仅主库；不含 -wal/-shm）
+!src/StockSim.Web/stocksim.db
 
 ## Secrets / local
 **/appsettings.*.local.json
