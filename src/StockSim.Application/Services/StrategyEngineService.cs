@@ -136,6 +136,15 @@ public class StrategyEngineService
                     }
                 }
 
+                // Bid/Ask 相对 Last 严重偏离时跳过（卖出用 Bid、买入用 Ask，脏盘口会直接打出天价成交）
+                if (!QuotePriceGuard.IsBookConsistent(quote))
+                {
+                    _logger.LogWarning(
+                        "Skip inconsistent book {Symbol}: last={Last} bid={Bid} ask={Ask}",
+                        symbol, quote.LastPrice, quote.Bid, quote.Ask);
+                    continue;
+                }
+
                 var snap = _sessionTracker.Update(quote, now);
                 var overrides = _adaptive.Adjust(policy, runtime, snap, now);
                 var effective = policy.ToEffective(overrides);
@@ -330,7 +339,15 @@ public class StrategyEngineService
             if (quote is null || quote.IsSuspended || quote.IsLimitUp)
                 continue;
 
-            var price = quote.Ask > 0 ? quote.Ask : quote.LastPrice;
+            if (!QuotePriceGuard.IsBookConsistent(quote))
+            {
+                _logger.LogWarning(
+                    "Trend skip inconsistent book {Symbol}: last={Last} bid={Bid} ask={Ask}",
+                    item.Symbol, quote.LastPrice, quote.Bid, quote.Ask);
+                continue;
+            }
+
+            var price = QuotePriceGuard.SafeAsk(quote);
             if (price <= 0) continue;
 
             var low = fc.PredictedLow;

@@ -67,7 +67,8 @@ public sealed class InstantMatchingEngine : IMatchingEngine
             return new MatchResult { Order = order };
         }
 
-        // Quote 校验在上层传入 RiskChecker 前完成；此处用账户/持仓再校验一次资金与可卖。
+        // 上层已用真实行情做过风控；此处再校验资金/可卖。
+        // LastPrice 保留信号价以外的参考时无法取得真实 Last，故仅做账户侧校验。
         var fakeQuote = new MarketData.QuoteTick
         {
             Symbol = signal.Symbol,
