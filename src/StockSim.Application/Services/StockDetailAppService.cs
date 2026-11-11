@@ -96,14 +96,14 @@ public class StockDetailAppService
             .GroupBy(f => f.Symbol, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 g => g.Key,
-                g => Math.Round(g.Average(x => x.CombinedAccuracyPct!.Value), 1),
+                g => Math.Round(g.Average(ScoredCombined), 1),
                 StringComparer.OrdinalIgnoreCase);
         var atrAvgBySymbol = accuracyRows
             .Where(f => f.Source == ForecastSource.AtrBaseline)
             .GroupBy(f => f.Symbol, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 g => g.Key,
-                g => Math.Round(g.Average(x => x.CombinedAccuracyPct!.Value), 1),
+                g => Math.Round(g.Average(ScoredCombined), 1),
                 StringComparer.OrdinalIgnoreCase);
 
         var boundSymbolSet = items
@@ -392,6 +392,17 @@ public class StockDetailAppService
         decimal? avgAtr = atrScored.Count == 0
             ? null
             : Math.Round(atrScored.Average(h => h.CombinedAccuracyPct!.Value), 2);
+        var hitEligible = scored.Where(h => h.RangeHit.HasValue).ToList();
+        decimal? hitRate = hitEligible.Count == 0
+            ? null
+            : Math.Round(100m * hitEligible.Count(h => h.RangeHit == true) / hitEligible.Count, 1);
+        decimal? avgMae = scored.Count == 0
+            ? null
+            : Math.Round(
+                scored.Average(h => h.MeanAbsDeviationPct
+                    ?? PriceForecastMetrics.MeanAbsDeviationPct(
+                        h.HighDeviationPct ?? 0m, h.LowDeviationPct ?? 0m)),
+                2);
 
         return new StockDetailPageDto(
             bundle,
@@ -406,31 +417,63 @@ public class StockDetailAppService
             avgCombined,
             poolItemId,
             avgAi,
-            avgAtr);
+            avgAtr,
+            hitRate,
+            avgMae);
     }
 
-    private static PriceRangeForecastDto ToForecastDto(PriceRangeForecast f) => new(
-        f.Id,
-        f.Symbol,
-        f.Name,
-        f.ForecastForDate,
-        f.PredictedAt,
-        f.PredictedHigh,
-        f.PredictedLow,
-        f.ActualHigh,
-        f.ActualLow,
-        f.HighDeviationPct,
-        f.LowDeviationPct,
-        f.HighAccuracyPct,
-        f.LowAccuracyPct,
-        f.CombinedAccuracyPct,
-        f.RangeHit,
-        f.Status.ToString(),
-        f.EvaluatedAt,
-        f.Notes,
-        f.Prompt,
-        f.Source.ToString(),
-        f.CountsTowardAccuracy);
+    private static decimal ScoredCombined(PriceRangeForecast f)
+        => PriceForecastMetrics.RescoreCombinedAccuracy(f.HighDeviationPct, f.LowDeviationPct)
+           ?? f.CombinedAccuracyPct
+           ?? 0m;
+
+    private static PriceRangeForecastDto ToForecastDto(PriceRangeForecast f)
+    {
+        decimal? highAbs = f.ActualHigh is { } ah
+            ? PriceForecastMetrics.AbsoluteError(f.PredictedHigh, ah)
+            : null;
+        decimal? lowAbs = f.ActualLow is { } al
+            ? PriceForecastMetrics.AbsoluteError(f.PredictedLow, al)
+            : null;
+        decimal? meanAbs = f.HighDeviationPct is { } hd && f.LowDeviationPct is { } ld
+            ? PriceForecastMetrics.MeanAbsDeviationPct(hd, ld)
+            : null;
+        var combined = PriceForecastMetrics.RescoreCombinedAccuracy(f.HighDeviationPct, f.LowDeviationPct)
+                       ?? f.CombinedAccuracyPct;
+        var highAcc = f.HighDeviationPct is { } hDev
+            ? PriceForecastMetrics.AccuracyPct(hDev)
+            : f.HighAccuracyPct;
+        var lowAcc = f.LowDeviationPct is { } lDev
+            ? PriceForecastMetrics.AccuracyPct(lDev)
+            : f.LowAccuracyPct;
+
+        return new PriceRangeForecastDto(
+            f.Id,
+            f.Symbol,
+            f.Name,
+            f.ForecastForDate,
+            f.PredictedAt,
+            f.PredictedHigh,
+            f.PredictedLow,
+            f.ActualHigh,
+            f.ActualLow,
+            f.HighDeviationPct,
+            f.LowDeviationPct,
+            highAcc,
+            lowAcc,
+            combined,
+            f.RangeHit,
+            f.Status.ToString(),
+            f.EvaluatedAt,
+            f.Notes,
+            f.Prompt,
+            f.Source.ToString(),
+            f.CountsTowardAccuracy,
+            highAbs,
+            lowAbs,
+            meanAbs,
+            PriceForecastMetrics.AccuracyGrade(combined));
+    }
 
     public async Task<IntradayChartDto?> GetIntradayChartAsync(string symbol, DateTime tradeDate, CancellationToken ct = default)
     {

@@ -7,8 +7,8 @@ namespace StockSim.Domain.Strategies;
 /// <summary>高低价预测的目标日、偏差、准确率、ATR 基线与校准。</summary>
 public static class PriceForecastMetrics
 {
-    /// <summary>相对偏差容差（%）：|偏差|≤此值时准确率为 100。</summary>
-    public const decimal DefaultTolerancePct = 1.5m;
+    /// <summary>相对偏差容差（%）：平均绝对偏差≤此值时综合准确率为 100。</summary>
+    public const decimal DefaultTolerancePct = 5.0m;
 
     /// <summary>连续竞价开盘时刻；此前视为开市前。</summary>
     public static readonly TimeSpan MarketOpenTime = new(9, 30, 0);
@@ -86,11 +86,52 @@ public static class PriceForecastMetrics
         return Math.Round((predicted - actual) / actual * 100m, 4);
     }
 
+    /// <summary>绝对误差（元）：|预测−实际|。</summary>
+    public static decimal AbsoluteError(decimal predicted, decimal actual)
+        => Math.Round(Math.Abs(predicted - actual), 4);
+
+    /// <summary>相对误差%：高/低绝对偏差%的平均。</summary>
+    public static decimal MeanAbsDeviationPct(decimal highDeviationPct, decimal lowDeviationPct)
+        => Math.Round((Math.Abs(highDeviationPct) + Math.Abs(lowDeviationPct)) / 2m, 4);
+
     public static decimal AccuracyPct(decimal deviationPct, decimal tolerancePct = DefaultTolerancePct)
     {
         if (tolerancePct <= 0) return 0;
         var score = 100m * (1m - Math.Abs(deviationPct) / tolerancePct);
         return Math.Clamp(Math.Round(score, 2), 0m, 100m);
+    }
+
+    /// <summary>由平均绝对偏差%打综合分（0–100）。</summary>
+    public static decimal CombinedAccuracyFromMeanAbs(
+        decimal meanAbsDeviationPct,
+        decimal tolerancePct = DefaultTolerancePct)
+    {
+        if (tolerancePct <= 0) return 0;
+        var score = 100m * (1m - meanAbsDeviationPct / tolerancePct);
+        return Math.Clamp(Math.Round(score, 2), 0m, 100m);
+    }
+
+    /// <summary>综合得分等级：优秀 / 良好 / 一般 / 较差。</summary>
+    public static string AccuracyGrade(decimal? combinedAccuracyPct) => combinedAccuracyPct switch
+    {
+        null => "-",
+        >= 80m => "优秀",
+        >= 60m => "良好",
+        >= 40m => "一般",
+        _ => "较差"
+    };
+
+    /// <summary>
+    /// 用已存偏差重算综合分（兼容旧容差落库数据的展示层刷新）。
+    /// </summary>
+    public static decimal? RescoreCombinedAccuracy(
+        decimal? highDeviationPct,
+        decimal? lowDeviationPct,
+        decimal tolerancePct = DefaultTolerancePct)
+    {
+        if (highDeviationPct is null || lowDeviationPct is null) return null;
+        var meanAbs = MeanAbsDeviationPct(highDeviationPct.Value, lowDeviationPct.Value);
+        return CombinedAccuracyFromMeanAbs(meanAbs, tolerancePct);
     }
 
     public static (
@@ -99,7 +140,8 @@ public static class PriceForecastMetrics
         decimal HighAccuracyPct,
         decimal LowAccuracyPct,
         decimal CombinedAccuracyPct,
-        bool RangeHit) Evaluate(
+        bool RangeHit,
+        decimal MeanAbsDeviationPct) Evaluate(
         decimal predictedHigh,
         decimal predictedLow,
         decimal actualHigh,
@@ -110,11 +152,12 @@ public static class PriceForecastMetrics
         var lowDev = DeviationPct(predictedLow, actualLow);
         var highAcc = AccuracyPct(highDev, tolerancePct);
         var lowAcc = AccuracyPct(lowDev, tolerancePct);
-        var combined = Math.Round((highAcc + lowAcc) / 2m, 2);
+        var meanAbs = MeanAbsDeviationPct(highDev, lowDev);
+        var combined = CombinedAccuracyFromMeanAbs(meanAbs, tolerancePct);
         var lo = Math.Min(predictedLow, predictedHigh);
         var hi = Math.Max(predictedLow, predictedHigh);
         var rangeHit = actualLow >= lo && actualHigh <= hi;
-        return (highDev, lowDev, highAcc, lowAcc, combined, rangeHit);
+        return (highDev, lowDev, highAcc, lowAcc, combined, rangeHit, meanAbs);
     }
 
     /// <summary>占位预测不计入准确率榜。</summary>

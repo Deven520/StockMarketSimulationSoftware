@@ -112,7 +112,9 @@ public record StockDetailPageDto(
     decimal? AvgCombinedAccuracyPct = null,
     Guid? PoolItemId = null,
     decimal? AvgAiAccuracyPct = null,
-    decimal? AvgAtrAccuracyPct = null);
+    decimal? AvgAtrAccuracyPct = null,
+    decimal? HitRatePct = null,
+    decimal? AvgMeanAbsDeviationPct = null);
 
 /// <summary>目标日高低价预测与对账准确率（含预测股票与来源）。</summary>
 public record PriceRangeForecastDto(
@@ -136,7 +138,11 @@ public record PriceRangeForecastDto(
     string? Notes,
     string? Prompt = null,
     string Source = "Ai",
-    bool CountsTowardAccuracy = true);
+    bool CountsTowardAccuracy = true,
+    decimal? HighAbsError = null,
+    decimal? LowAbsError = null,
+    decimal? MeanAbsDeviationPct = null,
+    string AccuracyGrade = "-");
 
 public record IntradayBarDto(string Time, decimal Open, decimal Close, decimal Low, decimal High, long Volume);
 

@@ -147,8 +147,11 @@
                         <th>来源</th>
                         <th>预测高/低</th>
                         <th>实际高/低</th>
-                        <th>偏差% 高/低</th>
-                        <th>准确率 综合</th>
+                        <th title="|预测−实际|（元）">绝对误差 高/低</th>
+                        <th title="高/低绝对偏差%的平均">相对误差%</th>
+                        <th title="实际高低是否落在预测区间">区间覆盖</th>
+                        <th title="容差 5%：100×(1−相对误差%/5)">综合得分</th>
+                        <th>等级</th>
                         <th>计入榜</th>
                         <th>状态</th>
                         <th style="min-width:220px;">预测提示词</th>
@@ -164,8 +167,11 @@
                             <td>@row.Source</td>
                             <td>@row.PredictedHigh.ToString("N2") / @row.PredictedLow.ToString("N2")</td>
                             <td>@(row.ActualHigh?.ToString("N2") ?? "-") / @(row.ActualLow?.ToString("N2") ?? "-")</td>
-                            <td>@(row.HighDeviationPct?.ToString("N2") ?? "-") / @(row.LowDeviationPct?.ToString("N2") ?? "-")</td>
+                            <td>@(row.HighAbsError?.ToString("N2") ?? "-") / @(row.LowAbsError?.ToString("N2") ?? "-")</td>
+                            <td>@(row.MeanAbsDeviationPct?.ToString("N2") ?? "-")</td>
+                            <td>@(row.RangeHit is null ? "-" : (row.RangeHit.Value ? "已覆盖" : "未覆盖"))</td>
                             <td>@(row.CombinedAccuracyPct?.ToString("N1") ?? "-")</td>
+                            <td>@row.AccuracyGrade</td>
                             <td>@(row.CountsTowardAccuracy ? "是" : "否")</td>
                             <td>@row.Status</td>
                             <td class="small" style="white-space:pre-wrap;word-break:break-word;max-width:360px;" title="@(row.Prompt ?? "")">@(string.IsNullOrWhiteSpace(row.Prompt) ? "-" : row.Prompt)</td>
@@ -184,10 +190,18 @@
                 </table>
             </div>
             <div class="small text-muted p-2">
-                每晚约 22:00（及补跑）仅用真源日K对账；未收盘/无日K/模拟行情不对账。容差 1.5%。交易日 15:00 前预测当日，否则下一交易日。盘中做 T 会用有效预测作软边界（须接近预测高/低区才触发）。
+                每晚约 22:00（及补跑）仅用真源日K对账；未收盘/无日K/模拟行情不对账。综合得分容差 5%（平均绝对偏差%）。交易日 15:00 前预测当日，否则下一交易日。盘中做 T 会用有效预测作软边界（须接近预测高/低区才触发）。
                 @if (Model.AvgCombinedAccuracyPct.HasValue)
                 {
-                    <span>计入榜平均：@Model.AvgCombinedAccuracyPct?.ToString("N1")。</span>
+                    <span>历史综合准确率：@Model.AvgCombinedAccuracyPct?.ToString("N1")。</span>
+                }
+                @if (Model.HitRatePct.HasValue)
+                {
+                    <span>历史命中率：@Model.HitRatePct?.ToString("N1")%。</span>
+                }
+                @if (Model.AvgMeanAbsDeviationPct.HasValue)
+                {
+                    <span>历史平均误差：@Model.AvgMeanAbsDeviationPct?.ToString("N2")%。</span>
                 }
                 @if (Model.AvgAiAccuracyPct.HasValue || Model.AvgAtrAccuracyPct.HasValue)
                 {

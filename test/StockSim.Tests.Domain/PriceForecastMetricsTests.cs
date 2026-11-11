@@ -54,10 +54,38 @@ public class PriceForecastMetricsTests
     public void Evaluate_Deviation_Matches_Formula()
     {
         // 预测 160 vs 实际 574.55 → 约 -72%
-        var (highDev, _, _, _, combined, _) = PriceForecastMetrics.Evaluate(
+        var (highDev, _, _, _, combined, _, meanAbs) = PriceForecastMetrics.Evaluate(
             160.85m, 155.15m, 574.55m, 528.88m);
         Assert.True(highDev < -70m);
+        Assert.True(meanAbs > 5m);
         Assert.Equal(0m, combined);
+        Assert.Equal("较差", PriceForecastMetrics.AccuracyGrade(combined));
+    }
+
+    [Fact]
+    public void Evaluate_Uses_MeanAbs_With_5Pct_Tolerance()
+    {
+        // 通富例：预测 46.28/40.14 vs 实际 46.98/44.34 → 相对误差约 5.48% → 得分 0
+        var (highDev, lowDev, _, _, combined, rangeHit, meanAbs) = PriceForecastMetrics.Evaluate(
+            46.28m, 40.14m, 46.98m, 44.34m);
+        Assert.Equal(-1.4900m, highDev);
+        Assert.Equal(-9.4723m, lowDev);
+        Assert.True(meanAbs > 5m && meanAbs < 6m);
+        Assert.False(rangeHit);
+        Assert.Equal(0m, combined);
+        Assert.Equal(0.70m, PriceForecastMetrics.AbsoluteError(46.28m, 46.98m));
+        Assert.Equal(4.20m, PriceForecastMetrics.AbsoluteError(40.14m, 44.34m));
+    }
+
+    [Fact]
+    public void Evaluate_Near_Perfect_Scores_Excellent()
+    {
+        var (_, _, _, _, combined, rangeHit, meanAbs) = PriceForecastMetrics.Evaluate(
+            100.5m, 99.5m, 100m, 100m);
+        Assert.True(meanAbs < 1m);
+        Assert.True(combined >= 80m);
+        Assert.True(rangeHit);
+        Assert.Equal("优秀", PriceForecastMetrics.AccuracyGrade(combined));
     }
 
     [Fact]

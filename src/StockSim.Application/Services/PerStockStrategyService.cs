@@ -558,20 +558,24 @@ public class PerStockStrategyService
                 continue;
             }
 
-            // 已对账且与日K一致则跳过，减少无意义覆写
-            if (row.Status == ForecastStatus.Evaluated
-                && row.ActualHigh == actual.Value.High
-                && row.ActualLow == actual.Value.Low)
-                continue;
-
-            var reevaluated = row.Status == ForecastStatus.Evaluated
-                              || row.Status == ForecastStatus.Skipped;
-
-            var (highDev, lowDev, highAcc, lowAcc, combined, rangeHit) = PriceForecastMetrics.Evaluate(
+            var (highDev, lowDev, highAcc, lowAcc, combined, rangeHit, _) = PriceForecastMetrics.Evaluate(
                 row.PredictedHigh,
                 row.PredictedLow,
                 actual.Value.High,
                 actual.Value.Low);
+
+            // 已对账、日K一致且得分未变则跳过；容差/公式变更时仍重写
+            if (row.Status == ForecastStatus.Evaluated
+                && row.ActualHigh == actual.Value.High
+                && row.ActualLow == actual.Value.Low
+                && row.CombinedAccuracyPct == combined
+                && row.HighAccuracyPct == highAcc
+                && row.LowAccuracyPct == lowAcc
+                && row.RangeHit == rangeHit)
+                continue;
+
+            var reevaluated = row.Status == ForecastStatus.Evaluated
+                              || row.Status == ForecastStatus.Skipped;
 
             row.ActualHigh = actual.Value.High;
             row.ActualLow = actual.Value.Low;
@@ -759,7 +763,9 @@ public class PerStockStrategyService
 
         var meanHigh = Math.Round(rows.Average(r => r.HighDeviationPct!.Value), 4);
         var meanLow = Math.Round(rows.Average(r => r.LowDeviationPct!.Value), 4);
-        var avgAcc = Math.Round(rows.Average(r => r.CombinedAccuracyPct!.Value), 2);
+        var avgAcc = Math.Round(rows.Average(r =>
+            PriceForecastMetrics.RescoreCombinedAccuracy(r.HighDeviationPct, r.LowDeviationPct)
+            ?? r.CombinedAccuracyPct!.Value), 2);
         return (meanHigh, meanLow, avgAcc);
     }
 
@@ -910,28 +916,47 @@ public class PerStockStrategyService
         return s.Length <= n ? s : s[..n] + "…";
     }
 
-    private static Dtos.PriceRangeForecastDto ToDto(PriceRangeForecast f) => new(
-        f.Id,
-        f.Symbol,
-        f.Name,
-        f.ForecastForDate,
-        f.PredictedAt,
-        f.PredictedHigh,
-        f.PredictedLow,
-        f.ActualHigh,
-        f.ActualLow,
-        f.HighDeviationPct,
-        f.LowDeviationPct,
-        f.HighAccuracyPct,
-        f.LowAccuracyPct,
-        f.CombinedAccuracyPct,
-        f.RangeHit,
-        f.Status.ToString(),
-        f.EvaluatedAt,
-        f.Notes,
-        f.Prompt,
-        f.Source.ToString(),
-        f.CountsTowardAccuracy);
+    private static Dtos.PriceRangeForecastDto ToDto(PriceRangeForecast f)
+    {
+        decimal? highAbs = f.ActualHigh is { } ah
+            ? PriceForecastMetrics.AbsoluteError(f.PredictedHigh, ah)
+            : null;
+        decimal? lowAbs = f.ActualLow is { } al
+            ? PriceForecastMetrics.AbsoluteError(f.PredictedLow, al)
+            : null;
+        decimal? meanAbs = f.HighDeviationPct is { } hd && f.LowDeviationPct is { } ld
+            ? PriceForecastMetrics.MeanAbsDeviationPct(hd, ld)
+            : null;
+        var combined = PriceForecastMetrics.RescoreCombinedAccuracy(f.HighDeviationPct, f.LowDeviationPct)
+                       ?? f.CombinedAccuracyPct;
+
+        return new(
+            f.Id,
+            f.Symbol,
+            f.Name,
+            f.ForecastForDate,
+            f.PredictedAt,
+            f.PredictedHigh,
+            f.PredictedLow,
+            f.ActualHigh,
+            f.ActualLow,
+            f.HighDeviationPct,
+            f.LowDeviationPct,
+            f.HighDeviationPct is { } hDev ? PriceForecastMetrics.AccuracyPct(hDev) : f.HighAccuracyPct,
+            f.LowDeviationPct is { } lDev ? PriceForecastMetrics.AccuracyPct(lDev) : f.LowAccuracyPct,
+            combined,
+            f.RangeHit,
+            f.Status.ToString(),
+            f.EvaluatedAt,
+            f.Notes,
+            f.Prompt,
+            f.Source.ToString(),
+            f.CountsTowardAccuracy,
+            highAbs,
+            lowAbs,
+            meanAbs,
+            PriceForecastMetrics.AccuracyGrade(combined));
+    }
 
     private sealed record ParsedStrategyAi(
         string? Analysis,
