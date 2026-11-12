@@ -146,13 +146,13 @@
                 {
                     if (i.RiseSuccess == true)
                     {
-                        <span class="badge bg-danger">成功</span>
-                        <span class="text-danger ms-1">@((i.RiseReturnPct ?? 0m).ToString("+0.00;-0.00;0"))%</span>
+                        <span class="badge bg-danger" title="预涨成功（收涨）">成功</span>
+                        <strong class="text-danger ms-1">@((i.RiseReturnPct ?? 0m).ToString("+0.00;-0.00;0"))%</strong>
                     }
                     else if (i.RiseSuccess == false)
                     {
-                        <span class="badge bg-success">失败</span>
-                        <span class="text-success ms-1">@((i.RiseReturnPct ?? 0m).ToString("+0.00;-0.00;0"))%</span>
+                        <span class="badge bg-success" title="预涨失败（收跌/平）">失败</span>
+                        <strong class="text-success ms-1">@((i.RiseReturnPct ?? 0m).ToString("+0.00;-0.00;0"))%</strong>
                     }
                     else if (i.PredictedRiseDate.HasValue && i.PredictedRiseDate.Value.Date <= DateTime.Today
                              && DateTime.Now.TimeOfDay >= new TimeSpan(15, 0, 0))
@@ -209,7 +209,13 @@
             <td>
                 @if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
                 {
-                    <span class="badge bg-warning text-dark">@i.RuntimeStatusText</span>
+                    @* A股习惯：成功(涨)=红，失败(跌)=绿 *@
+                    var riseStatusClass = i.RiseSuccess == true
+                        ? "bg-danger"
+                        : i.RiseSuccess == false
+                            ? "bg-success"
+                            : "bg-warning text-dark";
+                    <span class="badge @riseStatusClass">@i.RuntimeStatusText</span>
                 }
                 else if (i.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.TrendSwing)
                 {
