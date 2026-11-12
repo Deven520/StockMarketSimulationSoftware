@@ -74,11 +74,15 @@
                 <div class="ths-panel-hd d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <span id="intradayTitle">分时 / 分K（点击下方日K切换日期）</span>
                     <span id="intradayMeta" class="small"></span>
+                    <span class="small text-muted ms-auto" title="B=买 S=卖（含策略单）">标记：<span style="color:#e74c3c">B</span>/<span style="color:#1abc9c">S</span></span>
                 </div>
                 <div id="chartMinute" class="ths-chart"></div>
             </div>
             <div class="ths-panel mt-2">
-                <div class="ths-panel-hd">日K · 近一年（点击K线查看该日分时K）</div>
+                <div class="ths-panel-hd d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <span>日K · 近一年（点击K线查看该日分时K）</span>
+                    <span class="small text-muted" title="B=手工买 S=手工卖 T=策略做T">标记：<span style="color:#e74c3c">B</span>/<span style="color:#1abc9c">S</span>/<span style="color:#f5d76e">T</span></span>
+                </div>
                 <div id="chartDaily" class="ths-chart ths-chart-lg"></div>
             </div>
         </div>
@@ -256,11 +260,121 @@
   const minuteOhlc = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(minutes.Select(m => new[] { (double)m.Open, (double)m.Close, (double)m.Low, (double)m.High })));
   const preClose = @(b.PreClose.ToString(System.Globalization.CultureInfo.InvariantCulture));
   const intradayUrl = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Url.Action("Intraday", "Pools")));
+  const allTradeMarks = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(
+      (Model.ChartTradeMarks ?? Array.Empty<StockSim.Application.Dtos.ChartTradeMarkDto>())
+          .Select(t => new {
+              date = t.Date,
+              time = t.Time,
+              kind = t.Kind,
+              side = t.Side,
+              price = t.Price,
+              quantity = t.Quantity,
+              isStrategyT = t.IsStrategyT
+          })));
 
   const minuteChart = echarts.init(document.getElementById('chartMinute'));
   const dailyChart = echarts.init(document.getElementById('chartDaily'));
   const titleEl = document.getElementById('intradayTitle');
   const metaEl = document.getElementById('intradayMeta');
+
+  function markColor(kind, side) {
+    if (kind === 'T') return '#f5d76e';
+    if (kind === 'B' || side === 'Buy') return '#e74c3c';
+    return '#1abc9c';
+  }
+
+  function nearestTimeIndex(times, hhmm) {
+    if (!times || !times.length || !hhmm) return -1;
+    const exact = times.indexOf(hhmm);
+    if (exact >= 0) return exact;
+    const toMin = (s) => {
+      const p = String(s).split(':');
+      return (Number(p[0]) || 0) * 60 + (Number(p[1]) || 0);
+    };
+    const target = toMin(hhmm);
+    let best = 0, bestDiff = Infinity;
+    for (let i = 0; i < times.length; i++) {
+      const d = Math.abs(toMin(times[i]) - target);
+      if (d < bestDiff) { bestDiff = d; best = i; }
+    }
+    return best;
+  }
+
+  function buildTradeScatter(timesOrDates, marks, mode, ohlcData) {
+    // mode: 'intraday' | 'daily'
+    const buys = [], sells = [], tees = [];
+    (marks || []).forEach(m => {
+      const kind = m.kind || (m.isStrategyT ? 'T' : (m.side === 'Buy' ? 'B' : 'S'));
+      const label = kind;
+      const color = markColor(kind, m.side);
+      let x, y;
+      if (mode === 'daily') {
+        x = m.date;
+        const idx = timesOrDates.indexOf(x);
+        if (idx < 0) return;
+        const ohlc = ohlcData && ohlcData[idx];
+        if (!ohlc) return;
+        const [, c, l, h] = ohlc;
+        y = kind === 'B' ? Number(l) * 0.997 : (kind === 'S' ? Number(h) * 1.003 : Number(c));
+      } else {
+        const ti = nearestTimeIndex(timesOrDates, m.time);
+        if (ti < 0) return;
+        x = timesOrDates[ti];
+        y = Number(m.price);
+      }
+      const point = {
+        value: [x, y],
+        symbol: kind === 'B' ? 'triangle' : (kind === 'S' ? 'triangle' : 'diamond'),
+        symbolRotate: kind === 'S' ? 180 : 0,
+        symbolSize: kind === 'T' ? 14 : 12,
+        itemStyle: { color },
+        label: {
+          show: true,
+          formatter: label,
+          color,
+          fontSize: 11,
+          fontWeight: 700,
+          position: kind === 'S' ? 'top' : 'bottom',
+          distance: 2
+        },
+        trade: m
+      };
+      if (kind === 'T') tees.push(point);
+      else if (kind === 'B') buys.push(point);
+      else sells.push(point);
+    });
+    return [
+      { name: '买B', type: 'scatter', data: buys, z: 10, tooltip: { trigger: 'item' } },
+      { name: '卖S', type: 'scatter', data: sells, z: 10, tooltip: { trigger: 'item' } },
+      { name: '做T', type: 'scatter', data: tees, z: 11, tooltip: { trigger: 'item' } }
+    ];
+  }
+
+  function marksForDate(date) {
+    if (!date) return [];
+    return (allTradeMarks || []).filter(m => m.date === date);
+  }
+
+  /** 分时：只显示 B/S（策略单按买卖方向标，不标 T） */
+  function toIntradayMarks(marks) {
+    return (marks || []).map(m => {
+      const side = m.side === 'Buy' ? 'Buy' : 'Sell';
+      const kind = side === 'Buy' ? 'B' : 'S';
+      return { ...m, kind, isStrategyT: false };
+    });
+  }
+
+  /** 日K：保留 B/S/T */
+  function toDailyMarks(marks) {
+    return marks || [];
+  }
+
+  function formatTradeTip(m) {
+    if (!m) return '';
+    const sideCn = m.side === 'Buy' ? '买' : '卖';
+    const tag = m.kind === 'T' || m.isStrategyT ? '策略做T' : '手工';
+    return `${m.date || ''} ${m.time || ''} · ${tag}${sideCn} ${Number(m.price).toFixed(2)} × ${m.quantity}`;
+  }
 
   function pctVsPre(price, pre) {
     const p = Number(pre);
@@ -292,7 +406,7 @@
   }
 
   function renderIntraday(opt) {
-    const { tradeDate, times, closes, ohlc, pre, open, high, low, close, loading, error } = opt;
+    const { tradeDate, times, closes, ohlc, pre, open, high, low, close, trades, loading, error } = opt;
     if (loading) {
       titleEl.textContent = `加载 ${tradeDate || ''} 分时K…`;
       metaEl.textContent = '';
@@ -313,24 +427,57 @@
       `开 ${Number(open).toFixed(2)}  高 ${Number(high).toFixed(2)}  低 ${Number(low).toFixed(2)}  收 ${Number(close).toFixed(2)}  昨收 ${Number(pre).toFixed(2)}` +
       `　<span style="color:${chgColor(dayPct)};font-weight:600">涨跌 ${fmtSigned(dayChg, 2)}　${fmtSigned(dayPct, 2)}%</span>`;
 
+    const dayTrades = toIntradayMarks(trades || marksForDate(tradeDate));
     const useCandle = ohlc && ohlc.length > 0 && ohlc.some(x => x[0] !== x[1] || x[2] !== x[3]);
     const rangeVals = [
       ...(closes || []),
-      Number(open), Number(high), Number(low), Number(close)
+      Number(open), Number(high), Number(low), Number(close),
+      ...dayTrades.map(t => Number(t.price))
     ];
     if (ohlc) ohlc.forEach(c => { rangeVals.push(c[0], c[1], c[2], c[3]); });
     const { min: yMin, max: yMax } = priceAxisRange(pre, rangeVals);
+    const tradeSeries = buildTradeScatter(times, dayTrades, 'intraday').filter(s => s.name !== '做T');
+
+    const baseSeries = useCandle ? [
+      {
+        name: '分K',
+        type: 'candlestick',
+        data: ohlc,
+        yAxisIndex: 0,
+        itemStyle: { color: '#e74c3c', color0: '#1abc9c', borderColor: '#e74c3c', borderColor0: '#1abc9c' },
+        markLine: { silent: true, symbol: 'none', data: [{ yAxis: pre, lineStyle: { type: 'dashed', color: '#666' } }] }
+      },
+      {
+        name: '收盘价',
+        type: 'line',
+        data: closes,
+        yAxisIndex: 0,
+        showSymbol: false,
+        lineStyle: { width: 1, color: '#f5d76e' }
+      }
+    ] : [{
+      name: '分时',
+      type: 'line',
+      data: closes,
+      yAxisIndex: 0,
+      showSymbol: false,
+      lineStyle: { width: 1.5, color: '#f5d76e' },
+      markLine: { silent: true, symbol: 'none', data: [{ yAxis: pre, lineStyle: { type: 'dashed', color: '#666' } }] },
+      areaStyle: { color: 'rgba(245,215,110,0.08)' }
+    }];
 
     minuteChart.setOption({
       backgroundColor: 'transparent',
       animation: false,
-      legend: useCandle ? { data: ['分K', '收盘价'], textStyle: { color: '#aaa' } } : undefined,
+      legend: { data: useCandle ? ['分K', '收盘价', '买B', '卖S'] : ['分时', '买B', '卖S'], textStyle: { color: '#aaa' } },
       grid: { left: 52, right: 56, top: 36, bottom: 30 },
       tooltip: {
         trigger: 'axis',
         formatter: (params) => {
           const list = Array.isArray(params) ? params : [params];
-          const first = list[0];
+          const tradeHit = list.find(p => p.seriesType === 'scatter' && p.data && p.data.trade);
+          if (tradeHit) return formatTradeTip(tradeHit.data.trade);
+          const first = list.find(p => p.seriesType !== 'scatter') || list[0];
           if (!first) return '';
           const idx = first.dataIndex;
           const t = times[idx] || first.axisValue || '';
@@ -375,32 +522,7 @@
           splitLine: { show: false }
         }
       ],
-      series: useCandle ? [
-        {
-          name: '分K',
-          type: 'candlestick',
-          data: ohlc,
-          yAxisIndex: 0,
-          itemStyle: { color: '#e74c3c', color0: '#1abc9c', borderColor: '#e74c3c', borderColor0: '#1abc9c' },
-          markLine: { silent: true, symbol: 'none', data: [{ yAxis: pre, lineStyle: { type: 'dashed', color: '#666' } }] }
-        },
-        {
-          name: '收盘价',
-          type: 'line',
-          data: closes,
-          yAxisIndex: 0,
-          showSymbol: false,
-          lineStyle: { width: 1, color: '#f5d76e' }
-        }
-      ] : [{
-        type: 'line',
-        data: closes,
-        yAxisIndex: 0,
-        showSymbol: false,
-        lineStyle: { width: 1.5, color: '#f5d76e' },
-        markLine: { silent: true, symbol: 'none', data: [{ yAxis: pre, lineStyle: { type: 'dashed', color: '#666' } }] },
-        areaStyle: { color: 'rgba(245,215,110,0.08)' }
-      }]
+      series: [...baseSeries, ...tradeSeries]
     }, true);
   }
 
@@ -418,15 +540,19 @@
     close: @(b.Last.ToString(System.Globalization.CultureInfo.InvariantCulture))
   });
 
+  const dailyTradeSeries = buildTradeScatter(dailyDates, toDailyMarks(allTradeMarks), 'daily', dailyOhlc);
+
   dailyChart.setOption({
     backgroundColor: 'transparent',
     animation: false,
-    legend: { data: ['K线', '成交量'], textStyle: { color: '#aaa' } },
+    legend: { data: ['K线', '成交量', '买B', '卖S', '做T'], textStyle: { color: '#aaa' } },
     grid: [{ left: 50, right: 20, top: 40, height: '55%' }, { left: 50, right: 20, top: '75%', height: '16%' }],
     tooltip: {
       trigger: 'axis',
       formatter: (params) => {
         const list = Array.isArray(params) ? params : [params];
+        const tradeHit = list.find(p => p.seriesType === 'scatter' && p.data && p.data.trade);
+        if (tradeHit) return formatTradeTip(tradeHit.data.trade);
         const candle = list.find(p => p.seriesType === 'candlestick') || list[0];
         if (!candle) return '';
         const idx = candle.dataIndex;
@@ -444,6 +570,13 @@
         }
         const vol = dailyVol[idx];
         if (vol != null) html += `<div>量 ${Number(vol).toLocaleString()}</div>`;
+        const dayMarks = marksForDate(date);
+        if (dayMarks.length) {
+          html += `<div style="margin-top:4px;color:#ccc">${dayMarks.map(m => {
+            const k = m.kind || (m.isStrategyT ? 'T' : (m.side === 'Buy' ? 'B' : 'S'));
+            return `${k} ${Number(m.price).toFixed(2)}×${m.quantity}`;
+          }).join('　')}</div>`;
+        }
         return html;
       }
     },
@@ -458,7 +591,8 @@
     dataZoom: [{ type: 'inside', xAxisIndex: [0, 1], start: 60, end: 100 }, { type: 'slider', xAxisIndex: [0, 1], start: 60, end: 100, height: 18, bottom: 4 }],
     series: [
       { name: 'K线', type: 'candlestick', data: dailyOhlc, itemStyle: { color: '#e74c3c', color0: '#1abc9c', borderColor: '#e74c3c', borderColor0: '#1abc9c' } },
-      { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: dailyVol, itemStyle: { color: '#4a90e2' } }
+      { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: dailyVol, itemStyle: { color: '#4a90e2' } },
+      ...dailyTradeSeries
     ]
   });
 
@@ -483,7 +617,8 @@
         open: Number(data.open),
         high: Number(data.high),
         low: Number(data.low),
-        close: Number(data.close)
+        close: Number(data.close),
+        trades: data.trades || marksForDate(data.tradeDate || date)
       });
       document.getElementById('chartMinute').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (e) {

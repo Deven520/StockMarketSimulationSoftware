@@ -434,6 +434,8 @@ public class StockDetailAppService
                         h.HighDeviationPct ?? 0m, h.LowDeviationPct ?? 0m)),
                 2);
 
+        var chartMarks = await LoadChartTradeMarksAsync(symbol, fromDate: null, toDate: null, ct);
+
         return new StockDetailPageDto(
             bundle,
             running,
@@ -449,7 +451,54 @@ public class StockDetailAppService
             avgAi,
             avgAtr,
             hitRate,
-            avgMae);
+            avgMae,
+            chartMarks);
+    }
+
+    private async Task<IReadOnlyList<ChartTradeMarkDto>> LoadChartTradeMarksAsync(
+        string symbol,
+        DateTime? fromDate,
+        DateTime? toDate,
+        CancellationToken ct)
+    {
+        symbol = symbol.Trim().ToUpperInvariant();
+        var q = _db.Trades.AsNoTracking().Where(t => t.Symbol == symbol);
+        if (fromDate.HasValue)
+            q = q.Where(t => t.TradeDate >= fromDate.Value.Date);
+        if (toDate.HasValue)
+            q = q.Where(t => t.TradeDate <= toDate.Value.Date);
+
+        var rows = await q
+            .OrderBy(t => t.TradedAt)
+            .Take(2000)
+            .Select(t => new
+            {
+                t.TradeDate,
+                t.TradedAt,
+                t.Side,
+                t.Price,
+                t.Quantity,
+                t.StrategyDefinitionId
+            })
+            .ToListAsync(ct);
+
+        return rows.Select(t =>
+        {
+            var local = t.TradedAt.Kind == DateTimeKind.Utc
+                ? t.TradedAt.ToLocalTime()
+                : t.TradedAt;
+            var isT = t.StrategyDefinitionId.HasValue;
+            var side = t.Side == OrderSide.Buy ? "Buy" : "Sell";
+            var kind = isT ? "T" : (t.Side == OrderSide.Buy ? "B" : "S");
+            return new ChartTradeMarkDto(
+                t.TradeDate.ToString("yyyy-MM-dd"),
+                local.ToString("HH:mm"),
+                kind,
+                side,
+                t.Price,
+                t.Quantity,
+                isT);
+        }).ToList();
     }
 
     private static decimal ScoredCombined(PriceRangeForecast f)
@@ -519,6 +568,8 @@ public class StockDetailAppService
             .OrderByDescending(d => d.Date)
             .FirstOrDefault();
 
+        var dayMarks = await LoadChartTradeMarksAsync(symbol, date, date, ct);
+
         return new IntradayChartDto(
             symbol.Trim().ToUpperInvariant(),
             date.ToString("yyyy-MM-dd"),
@@ -533,6 +584,7 @@ public class StockDetailAppService
                 b.Close,
                 b.Low,
                 b.High,
-                b.Volume)).ToList());
+                b.Volume)).ToList(),
+            dayMarks);
     }
 }

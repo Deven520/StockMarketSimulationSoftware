@@ -103,7 +103,35 @@ public class PoolsController : Controller
             return NotFound(new { message = "该日暂无分时/分K数据" });
         }
 
-        return Json(chart);
+        return Json(new
+        {
+            symbol = chart.Symbol,
+            tradeDate = chart.TradeDate,
+            open = chart.Open,
+            high = chart.High,
+            low = chart.Low,
+            close = chart.Close,
+            preClose = chart.PreClose,
+            bars = chart.Bars.Select(b => new
+            {
+                time = b.Time,
+                open = b.Open,
+                close = b.Close,
+                low = b.Low,
+                high = b.High,
+                volume = b.Volume
+            }),
+            trades = (chart.Trades ?? Array.Empty<ChartTradeMarkDto>()).Select(t => new
+            {
+                date = t.Date,
+                time = t.Time,
+                kind = t.Kind,
+                side = t.Side,
+                price = t.Price,
+                quantity = t.Quantity,
+                isStrategyT = t.IsStrategyT
+            })
+        });
     }
 
     /// <summary>股票代码/名称模糊联想。</summary>

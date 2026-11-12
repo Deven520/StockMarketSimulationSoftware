@@ -143,7 +143,18 @@ public record StockDetailPageDto(
     decimal? AvgAiAccuracyPct = null,
     decimal? AvgAtrAccuracyPct = null,
     decimal? HitRatePct = null,
-    decimal? AvgMeanAbsDeviationPct = null);
+    decimal? AvgMeanAbsDeviationPct = null,
+    IReadOnlyList<ChartTradeMarkDto>? ChartTradeMarks = null);
+
+/// <summary>行情图成交点：手工买=B / 手工卖=S / 策略做T=T。</summary>
+public record ChartTradeMarkDto(
+    string Date,
+    string Time,
+    string Kind,
+    string Side,
+    decimal Price,
+    int Quantity,
+    bool IsStrategyT);
 
 /// <summary>目标日高低价预测与对账准确率（含预测股票与来源）。</summary>
 public record PriceRangeForecastDto(
@@ -183,7 +194,8 @@ public record IntradayChartDto(
     decimal Low,
     decimal Close,
     decimal PreClose,
-    IReadOnlyList<IntradayBarDto> Bars);
+    IReadOnlyList<IntradayBarDto> Bars,
+    IReadOnlyList<ChartTradeMarkDto>? Trades = null);
 
 public record StrategyDto(Guid Id, string Name, string? Description, bool IsEnabled, int CurrentVersion, string ParametersJson);
 public record CreateStrategyRequest(string Name, string? Description, string? ParametersJson, string? ChangeNote = null);
