@@ -28,6 +28,11 @@ public sealed class SymbolRuntimeState
     public decimal DayRealizedPnL { get; set; }
     public decimal? LastSellPrice { get; set; }
     public decimal? LastBuyPrice { get; set; }
+    /// <summary>未平正 T 卖出腿股数；买回后递减，至 0 清空 LastSellPrice。</summary>
+    public int OpenTQty { get; set; }
+    public IntradayPathRegime PathRegime { get; set; } = IntradayPathRegime.Unknown;
+    public PathPhase PathPhase { get; set; } = PathPhase.Hypothesis;
+    public string? PathReason { get; set; }
     public RuntimeOverrides Overrides { get; set; } = new();
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 
@@ -40,6 +45,10 @@ public sealed class SymbolRuntimeState
         DayRealizedPnL = 0;
         LastSellPrice = null;
         LastBuyPrice = null;
+        OpenTQty = 0;
+        PathRegime = IntradayPathRegime.Unknown;
+        PathPhase = PathPhase.Hypothesis;
+        PathReason = null;
         Overrides = new RuntimeOverrides();
         UpdatedAt = DateTime.UtcNow;
     }

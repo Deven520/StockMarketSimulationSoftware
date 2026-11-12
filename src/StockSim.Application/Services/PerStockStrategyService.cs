@@ -219,9 +219,13 @@ public class PerStockStrategyService
         var calibrationHint = avgAiAcc is null
             ? "尚无足够 AI 预测对账样本；请独立给出高低价，勿用参考价±固定百分比占位。"
             : $"近史 AI 预测平均偏差 高={meanHighDev:F2}% 低={meanLowDev:F2}% ，综合准确率={avgAiAcc:F1}；请据此纠偏，禁止输出占位区间。";
+        const string pathForecastExtra =
+            "另须输出 path（enable=true、confirmUntil=10:15、breakAvoidSigma、pullbackSellPct，可选 pathPriors 四类先验概率之和为1：" +
+            "HighOpenHighGo/HighOpenLowGo/LowOpenHighGo/LowOpenLowGo，仅作开盘假设加权不替代盘中确认）；" +
+            "forecast 增加 softBandMode=softPrefer、capHighByLimitPct（默认12），predictedHigh 须考虑涨停/ATR 上沿，勿给出日内不可达的过高上沿。";
         var prompt = isNightlyUpdate
-            ? $"请为 {item.Symbol} {item.Name} 输出 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)。{goalClause}结合近21日行情、今日成交、决策日志、热点新闻与「高低价预测对账结果」迭代；只定边界与偏好（triggers/sizing/risk/session/style），不要输出盘中下单指令。必须在 parameters.forecast（或根级 forecast）给出对{forecastDayLabel} {forecastTargetDate:yyyy-MM-dd} 的 predictedHigh / predictedLow（元），并设 source=ai、countsTowardAccuracy=true。{calibrationHint}规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。"
-            : $"请为 {item.Symbol} {item.Name} 生成 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)：style/aggression/session/triggers(含 anchor=vwap 与 buy/sellDeviationPct 的 base/min/max)/sizing/risk/factors/aiNotes/forecast。{goalClause}forecast 须含 forDate={forecastTargetDate:yyyy-MM-dd}、predictedHigh、predictedLow、source=ai、countsTowardAccuracy=true（预测{forecastDayLabel}最高/最低价）。{calibrationHint}规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。用于状态机「先高抛后低吸」做T，参数是边界不是死脚本。";
+            ? $"请为 {item.Symbol} {item.Name} 输出 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)。{goalClause}结合近21日行情、今日成交、决策日志、热点新闻与「高低价预测对账结果」迭代；只定边界与偏好（triggers/sizing/risk/session/style/path），不要输出盘中下单指令。必须在 parameters.forecast（或根级 forecast）给出对{forecastDayLabel} {forecastTargetDate:yyyy-MM-dd} 的 predictedHigh / predictedLow（元），并设 source=ai、countsTowardAccuracy=true。{pathForecastExtra}{calibrationHint}规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。"
+            : $"请为 {item.Symbol} {item.Name} 生成 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)：style/aggression/session/triggers(含 anchor=vwap 与 buy/sellDeviationPct 的 base/min/max)/sizing/risk/factors/path/aiNotes/forecast。{goalClause}forecast 须含 forDate={forecastTargetDate:yyyy-MM-dd}、predictedHigh、predictedLow、source=ai、countsTowardAccuracy=true、softBandMode=softPrefer、capHighByLimitPct（预测{forecastDayLabel}最高/最低价）。{pathForecastExtra}{calibrationHint}规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。用于状态机「路径分型+先高抛后低吸」做T，参数是边界不是死脚本。";
 
         var payload = JsonSerializer.Serialize(new
         {

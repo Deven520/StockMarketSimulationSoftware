@@ -1,6 +1,6 @@
 namespace StockSim.Domain.Strategies;
 
-/// <summary>L2：根据波动/量比/连亏在 Policy 边界内生成 RuntimeOverrides。</summary>
+/// <summary>L2：根据波动/量比/连亏/路径剧本在 Policy 边界内生成 RuntimeOverrides。</summary>
 public sealed class AdaptiveOverrideService
 {
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(2);
@@ -10,26 +10,27 @@ public sealed class AdaptiveOverrideService
         StrategyParameters policy,
         SymbolRuntimeState runtime,
         SessionSnapshot snap,
-        DateTime now)
+        DateTime now,
+        PathPlaybookResolver.Playbook? playbook = null)
     {
         var existing = runtime.Overrides;
         if (_lastAdjust.TryGetValue(runtime.Symbol, out var last)
             && now - last < RefreshInterval
-            && existing.AsOf.Date == now.Date)
+            && existing.AsOf.Date == now.Date
+            && playbook is null)
         {
             return existing;
         }
 
         _lastAdjust[runtime.Symbol] = now;
-        _ = policy.ToEffective(); // 确保 legacy 已迁移、区间已规范化
-        var expectedVol = 0.6m; // 经验基准：短窗收益标准差约 0.6%
+        _ = policy.ToEffective();
+        var expectedVol = 0.6m;
         var volScale = snap.RealizedVolPct <= 0
             ? 1m
             : Math.Clamp(snap.RealizedVolPct / expectedVol, 0.7m, 1.6m);
 
         var buyBase = policy.Triggers.BuyDeviationPct.Base;
         var sellBase = policy.Triggers.SellDeviationPct.Base;
-        // 波动大 → 阈值放宽（买更负、卖更正），仓位缩小
         var buyAdj = buyBase * volScale;
         var sellAdj = sellBase * volScale;
         var sizeAdj = policy.Sizing.PositionPctPerTrade.Base / volScale;
@@ -47,11 +48,31 @@ public sealed class AdaptiveOverrideService
         }
         else if (snap.VolumeRatio < policy.Factors.MinVolumeRatio * 0.5m && policy.Factors.UseVolumeConfirm)
         {
-            // 极缩量：不暂停整股，但仓位砍半（通过 size）
             sizeAdj *= 0.5m;
         }
 
-        if (string.Equals(policy.Style, "defensive", StringComparison.OrdinalIgnoreCase))
+        var style = policy.Style;
+        var allowBreak = false;
+        decimal? breakSigma = policy.Path.BreakAvoidSigma;
+        decimal? pullback = policy.Path.PullbackSellPct;
+        var blockNewT = false;
+        string? pathLabel = null;
+
+        if (playbook is not null)
+        {
+            style = playbook.Style;
+            allowBreak = playbook.AllowBreakAvoid;
+            breakSigma = playbook.BreakAvoidSigma;
+            pullback = playbook.PullbackSellPct;
+            blockNewT = playbook.BlockNewT;
+            pathLabel = playbook.Label;
+            buyAdj *= playbook.BuyThresholdScale;
+            sellAdj *= playbook.SellThresholdScale;
+            sizeAdj *= playbook.SizeScale;
+        }
+
+        if (string.Equals(style, "defensive", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(policy.Style, "defensive", StringComparison.OrdinalIgnoreCase))
         {
             buyAdj *= 1.15m;
             sellAdj *= 1.15m;
@@ -65,10 +86,16 @@ public sealed class AdaptiveOverrideService
             PositionPctPerTrade = sizeAdj,
             Paused = paused,
             PauseReason = pauseReason,
-            AsOf = now
+            AsOf = now,
+            StyleHint = style,
+            AllowBreakAvoid = allowBreak,
+            BreakAvoidSigma = breakSigma,
+            PullbackSellPct = pullback,
+            BlockNewT = blockNewT,
+            SoftBandShrinkScale = PriceForecastMetrics.SoftPreferShrinkScale,
+            PathLabel = pathLabel
         };
 
-        // 用 Resolve 钳住，确保不越界
         overrides.BuyDeviationPct = policy.Triggers.BuyDeviationPct.Resolve(overrides.BuyDeviationPct);
         overrides.SellDeviationPct = policy.Triggers.SellDeviationPct.Resolve(overrides.SellDeviationPct);
         overrides.PositionPctPerTrade = policy.Sizing.PositionPctPerTrade.Resolve(overrides.PositionPctPerTrade);

@@ -19,7 +19,7 @@ public interface IStrategyEvaluator
 }
 
 /// <summary>
-/// 自适应日内做T：先高抛后低吸状态机 + VWAP/锚点偏离 + 量能确认。
+/// 自适应日内做T：路径剧本 + 先高抛后低吸状态机 + VWAP/锚点偏离 + 量能确认。
 /// </summary>
 public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
 {
@@ -35,11 +35,10 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         var anchor = dayOpenOrBasePrice > 0 ? dayOpenOrBasePrice : quote.LastPrice;
         var deviation = anchor > 0 ? (quote.LastPrice - anchor) / anchor * 100m : 0m;
         var runtime = new SymbolRuntimeState { Symbol = quote.Symbol, TradeDate = DateTime.Today, State = TState.Idle };
-        // 旧路径无状态：按偏离直接映射（跌买涨卖），便于单测兼容
         if (deviation <= effective.BuyDeviationPct)
-            runtime.State = TState.SoldHigh; // 允许买回
+            runtime.State = TState.SoldHigh;
         else if (deviation >= effective.SellDeviationPct)
-            runtime.State = TState.Idle; // 允许高抛
+            runtime.State = TState.Idle;
 
         return Evaluate(new EvaluateContext
         {
@@ -55,7 +54,8 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
             Now = DateTime.Now,
             StrategyDefinitionId = strategyDefinitionId,
             StockPoolId = stockPoolId,
-            TradesToday = 0
+            TradesToday = 0,
+            ReferencePrice = dayOpenOrBasePrice
         });
     }
 
@@ -67,21 +67,20 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         var position = ctx.Position;
         var id = ctx.StrategyDefinitionId;
         var poolId = ctx.StockPoolId;
+        var pathTag = string.IsNullOrWhiteSpace(eff.PathLabel) ? "" : $"path={eff.PathLabel} ";
 
         if (eff.Paused)
-            return None(quote.Symbol, id, poolId, $"暂停: {eff.PauseReason ?? "override"}");
+            return None(quote.Symbol, id, poolId, $"{pathTag}暂停: {eff.PauseReason ?? "override"}");
 
         if (ctx.AnchorPrice <= 0)
-            return None(quote.Symbol, id, poolId, "无有效锚点价");
+            return None(quote.Symbol, id, poolId, $"{pathTag}无有效锚点价");
 
-        // 涨跌停附近
         if (quote.IsLimitUp || quote.IsLimitDown)
         {
             runtime.State = TState.RiskHalt;
-            return None(quote.Symbol, id, poolId, "涨跌停附近暂停");
+            return None(quote.Symbol, id, poolId, $"{pathTag}涨跌停附近暂停");
         }
 
-        // 入池后、做T日前：仅按行情建底仓，禁止高抛低吸
         if (ctx.NeedsBaseBuild)
         {
             runtime.State = TState.BuildingBase;
@@ -91,10 +90,9 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         if (!ctx.CanDoT)
         {
             runtime.State = TState.BuildingBase;
-            return None(quote.Symbol, id, poolId, "已有底仓，等待下一交易日开始做T");
+            return None(quote.Symbol, id, poolId, $"{pathTag}已有底仓，等待下一交易日开始做T");
         }
 
-        // 时段
         if (SessionWindowHelper.IsAtOrAfter(ctx.Now, eff.ForceFlatBefore))
             runtime.State = TState.ForceFlat;
         else if (SessionWindowHelper.IsInAnyWindow(ctx.Now, eff.AvoidWindows)
@@ -104,49 +102,57 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                  && !SessionWindowHelper.IsInAnyWindow(ctx.Now, eff.AvoidWindows))
             runtime.State = TState.Idle;
 
-        // 日亏停
         if (eff.DayLossStopPct < 0 && ctx.AnchorPrice > 0)
         {
-            var dayLossPct = ctx.AnchorPrice == 0
-                ? 0
-                : runtime.DayRealizedPnL / (ctx.AnchorPrice * Math.Max(position?.BaseQuantity ?? 100, 100)) * 100m;
+            var dayLossPct = runtime.DayRealizedPnL
+                / (ctx.AnchorPrice * Math.Max(position?.BaseQuantity ?? 100, 100)) * 100m;
             if (dayLossPct <= eff.DayLossStopPct)
             {
                 runtime.State = TState.RiskHalt;
-                return None(quote.Symbol, id, poolId, $"日亏 {dayLossPct:F2}% 触发停机");
+                return None(quote.Symbol, id, poolId, $"{pathTag}日亏 {dayLossPct:F2}% 触发停机");
             }
         }
 
         if (runtime.ConsecutiveLosses >= eff.SymbolPauseOnConsecutiveLosses && eff.SymbolPauseOnConsecutiveLosses > 0)
         {
             runtime.State = TState.RiskHalt;
-            return None(quote.Symbol, id, poolId, $"连亏 {runtime.ConsecutiveLosses} 次暂停");
+            return None(quote.Symbol, id, poolId, $"{pathTag}连亏 {runtime.ConsecutiveLosses} 次暂停");
         }
 
         if (runtime.State == TState.RiskHalt)
-            return None(quote.Symbol, id, poolId, "风控冻结中");
+            return None(quote.Symbol, id, poolId, $"{pathTag}风控冻结中");
+
+        var deviation = ctx.DeviationPct;
+        var breakAvoid = eff.AllowBreakAvoid
+            && deviation >= Math.Abs(eff.SellDeviationPct) * Math.Max(1m, eff.BreakAvoidSigma);
 
         if (runtime.State == TState.SessionAvoid)
-            return None(quote.Symbol, id, poolId, "avoid 时段观望");
+        {
+            if (breakAvoid)
+                runtime.State = TState.Idle; // 破 avoid 允许高抛
+            else
+                return None(quote.Symbol, id, poolId, $"{pathTag}avoid 时段观望");
+        }
 
         var baseQty = position?.BaseQuantity > 0
             ? position.BaseQuantity
             : position?.Quantity ?? 0;
         if (baseQty < 100 && runtime.State != TState.SoldHigh)
-            return None(quote.Symbol, id, poolId, "底仓不足100股");
+            return None(quote.Symbol, id, poolId, $"{pathTag}底仓不足100股");
 
         var tradeQty = AlignLot((int)Math.Floor(Math.Max(baseQty, 100) * eff.PositionPctPerTrade));
         if (tradeQty < 100) tradeQty = 100;
 
         var volOk = !eff.UseVolumeConfirm || ctx.VolumeRatio >= eff.MinVolumeRatio;
-        var deviation = ctx.DeviationPct;
 
-        // ForceFlat：只平 T 腿（买回 SoldHigh / 卖出 BoughtLow）
+        // ForceFlat：只平 OpenTQty（正T卖腿）或当日倒T超配；禁止 LastSellPrice 残留连买
         if (runtime.State == TState.ForceFlat)
         {
-            if (runtime.LastSellPrice.HasValue || HasSoldHighDeficit(position))
+            if (runtime.OpenTQty >= 100 || HasSoldHighDeficit(position))
             {
-                var buy = TryBuyBack(quote, position, tradeQty, eff, id, poolId, "收盘前买回");
+                var cap = runtime.OpenTQty >= 100 ? runtime.OpenTQty : tradeQty;
+                var buy = TryBuyBack(quote, position, Math.Min(tradeQty, AlignLot(cap)), eff, id, poolId,
+                    $"{pathTag}收盘前买回 OpenT={runtime.OpenTQty}");
                 if (buy.Action == SignalAction.Buy)
                 {
                     runtime.State = TState.Idle;
@@ -154,9 +160,14 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 }
             }
 
-            if (runtime.State == TState.BoughtLow || (position?.Quantity ?? 0) > (position?.BaseQuantity ?? 0))
+            var qtyNow = position?.Quantity ?? 0;
+            var baseNow = position?.BaseQuantity ?? 0;
+            var excess = qtyNow - baseNow;
+            // 仅平「当日有买入痕迹」的超配，避免历史歪仓触发卖后再被 OpenT 买回
+            if (excess >= 100 && runtime.LastBuyPrice.HasValue && runtime.OpenTQty <= 0)
             {
-                var sell = TrySellHigh(quote, position, tradeQty, eff, id, poolId, "收盘前减仓");
+                var sellQty = AlignLot(Math.Min(tradeQty, excess));
+                var sell = TrySellHigh(quote, position, sellQty, eff, id, poolId, $"{pathTag}收盘前减仓");
                 if (sell.Action == SignalAction.Sell)
                 {
                     runtime.State = TState.Idle;
@@ -164,7 +175,15 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 }
             }
 
-            return None(quote.Symbol, id, poolId, "ForceFlat 无需动作");
+            return None(quote.Symbol, id, poolId, $"{pathTag}ForceFlat 无需动作");
+        }
+
+        if (eff.BlockNewT
+            && runtime.State == TState.Idle
+            && runtime.OpenTQty <= 0
+            && !HasSoldHighDeficit(position))
+        {
+            return None(quote.Symbol, id, poolId, $"{pathTag}BlockNewT 观望");
         }
 
         // SoldHigh → 低吸买回
@@ -172,13 +191,12 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         {
             if (deviation <= eff.BuyDeviationPct && volOk)
             {
-                if (!PriceForecastMetrics.PassesForecastSoftBand(
-                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: false,
-                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlock))
-                    return None(quote.Symbol, id, poolId, softBlock ?? "预测软边界拦截低吸");
+                var (ok, qty, softNote) = ApplySoftBand(ctx, tradeQty, forSell: false);
+                if (!ok)
+                    return None(quote.Symbol, id, poolId, $"{pathTag}{softNote}");
 
-                var buy = TryBuyBack(quote, position, tradeQty, eff, id, poolId,
-                    $"低吸买回 偏离 {deviation:F2}%≤{eff.BuyDeviationPct:F2}%");
+                var buy = TryBuyBack(quote, position, qty, eff, id, poolId,
+                    $"{pathTag}低吸买回 偏离 {deviation:F2}%≤{eff.BuyDeviationPct:F2}%{softNote}");
                 if (buy.Action == SignalAction.Buy)
                 {
                     runtime.State = TState.Idle;
@@ -187,7 +205,7 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 }
             }
 
-            return None(quote.Symbol, id, poolId, "SoldHigh 等待低吸");
+            return None(quote.Symbol, id, poolId, $"{pathTag}SoldHigh 等待低吸");
         }
 
         // BoughtLow → 高抛卖出
@@ -195,13 +213,12 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         {
             if (deviation >= eff.SellDeviationPct && volOk)
             {
-                if (!PriceForecastMetrics.PassesForecastSoftBand(
-                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: true,
-                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlock))
-                    return None(quote.Symbol, id, poolId, softBlock ?? "预测软边界拦截高抛");
+                var (ok, qty, softNote) = ApplySoftBand(ctx, tradeQty, forSell: true);
+                if (!ok)
+                    return None(quote.Symbol, id, poolId, $"{pathTag}{softNote}");
 
-                var sell = TrySellHigh(quote, position, tradeQty, eff, id, poolId,
-                    $"高抛 偏离 {deviation:F2}%≥{eff.SellDeviationPct:F2}%");
+                var sell = TrySellHigh(quote, position, qty, eff, id, poolId,
+                    $"{pathTag}高抛 偏离 {deviation:F2}%≥{eff.SellDeviationPct:F2}%{softNote}");
                 if (sell.Action == SignalAction.Sell)
                 {
                     runtime.State = TState.Idle;
@@ -210,21 +227,27 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 }
             }
 
-            return None(quote.Symbol, id, poolId, "BoughtLow 等待高抛");
+            return None(quote.Symbol, id, poolId, $"{pathTag}BoughtLow 等待高抛");
         }
 
-        // Idle：默认先高抛；若已明显低于锚点且有卖出缺口则允许买回（兼容旧底仓未卖场景）
+        // Idle：先高抛 / 冲高回撤 / 补回 / 动量低吸
         if (runtime.State == TState.Idle)
         {
-            if (deviation >= eff.SellDeviationPct && volOk)
-            {
-                if (!PriceForecastMetrics.PassesForecastSoftBand(
-                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: true,
-                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlockSell))
-                    return None(quote.Symbol, id, poolId, softBlockSell ?? "预测软边界拦截高抛");
+            var pullbackHit = eff.PullbackSellPct > 0
+                && ctx.PullbackFromHighPct >= eff.PullbackSellPct
+                && deviation >= Math.Min(0.2m, eff.SellDeviationPct * 0.5m)
+                && volOk;
 
-                var sell = TrySellHigh(quote, position, tradeQty, eff, id, poolId,
-                    $"高抛 偏离 {deviation:F2}%≥{eff.SellDeviationPct:F2}%");
+            if ((deviation >= eff.SellDeviationPct && volOk) || pullbackHit)
+            {
+                var (ok, qty, softNote) = ApplySoftBand(ctx, tradeQty, forSell: true);
+                if (!ok)
+                    return None(quote.Symbol, id, poolId, $"{pathTag}{softNote}");
+
+                var why = pullbackHit && deviation < eff.SellDeviationPct
+                    ? $"冲高回撤卖 pb={ctx.PullbackFromHighPct:F2}%≥{eff.PullbackSellPct:F2}%"
+                    : $"高抛 偏离 {deviation:F2}%≥{eff.SellDeviationPct:F2}%";
+                var sell = TrySellHigh(quote, position, qty, eff, id, poolId, $"{pathTag}{why}{softNote}");
                 if (sell.Action == SignalAction.Sell)
                 {
                     runtime.State = TState.SoldHigh;
@@ -233,16 +256,14 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 }
             }
 
-            // 风格为 mean_reversion 且持仓低于底仓：允许补回
             if (deviation <= eff.BuyDeviationPct && volOk && HasSoldHighDeficit(position))
             {
-                if (!PriceForecastMetrics.PassesForecastSoftBand(
-                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: false,
-                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlockBuy))
-                    return None(quote.Symbol, id, poolId, softBlockBuy ?? "预测软边界拦截低吸");
+                var (ok, qty, softNote) = ApplySoftBand(ctx, tradeQty, forSell: false);
+                if (!ok)
+                    return None(quote.Symbol, id, poolId, $"{pathTag}{softNote}");
 
-                var buy = TryBuyBack(quote, position, tradeQty, eff, id, poolId,
-                    $"补回底仓 偏离 {deviation:F2}%");
+                var buy = TryBuyBack(quote, position, qty, eff, id, poolId,
+                    $"{pathTag}补回底仓 偏离 {deviation:F2}%{softNote}");
                 if (buy.Action == SignalAction.Buy)
                 {
                     runtime.State = TState.Idle;
@@ -251,23 +272,22 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 }
             }
 
-            // momentum_t：允许先低吸再高抛
             if (string.Equals(eff.Style, "momentum_t", StringComparison.OrdinalIgnoreCase)
                 && deviation <= eff.BuyDeviationPct && volOk
-                && (position?.Quantity ?? 0) >= 100)
+                && (position?.Quantity ?? 0) >= 100
+                && !eff.BlockNewT)
             {
-                if (!PriceForecastMetrics.PassesForecastSoftBand(
-                        ctx.Policy.Forecast, quote.LastPrice, ctx.Now, forSell: false,
-                        PriceForecastMetrics.ForecastSoftBandRatio, out var softBlockMom))
-                    return None(quote.Symbol, id, poolId, softBlockMom ?? "预测软边界拦截动量低吸");
+                var (ok, qty, softNote) = ApplySoftBand(ctx, tradeQty, forSell: false);
+                if (!ok)
+                    return None(quote.Symbol, id, poolId, $"{pathTag}{softNote}");
 
                 var buy = new TradeSignal
                 {
                     Symbol = quote.Symbol,
                     Action = SignalAction.Buy,
-                    Quantity = tradeQty,
+                    Quantity = qty,
                     Price = QuotePriceGuard.SafeAsk(quote),
-                    Reason = $"动量低吸 偏离 {deviation:F2}%",
+                    Reason = $"{pathTag}动量低吸 偏离 {deviation:F2}%{softNote}",
                     StrategyDefinitionId = id,
                     StockPoolId = poolId
                 };
@@ -276,10 +296,40 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 return buy;
             }
 
-            return None(quote.Symbol, id, poolId, volOk ? "Idle 未触发" : $"量比 {ctx.VolumeRatio:F2} 不足");
+            return None(quote.Symbol, id, poolId,
+                volOk ? $"{pathTag}Idle 未触发" : $"{pathTag}量比 {ctx.VolumeRatio:F2} 不足");
         }
 
-        return None(quote.Symbol, id, poolId, $"未知状态 {runtime.State}");
+        return None(quote.Symbol, id, poolId, $"{pathTag}未知状态 {runtime.State}");
+    }
+
+    private static (bool Ok, int Qty, string SoftNote) ApplySoftBand(
+        EvaluateContext ctx, int tradeQty, bool forSell)
+    {
+        var refPx = ctx.ReferencePrice > 0 ? ctx.ReferencePrice : ctx.AnchorPrice;
+        var verdict = PriceForecastMetrics.EvaluateForecastSoftBand(
+            ctx.Policy.Forecast,
+            ctx.Quote.LastPrice,
+            ctx.Now,
+            forSell,
+            PriceForecastMetrics.ForecastSoftBandRatio,
+            out var msg,
+            referencePrice: refPx);
+
+        if (verdict == SoftBandVerdict.Block)
+            return (false, tradeQty, msg ?? "预测软边界拦截");
+
+        if (verdict == SoftBandVerdict.PreferShrink)
+        {
+            var scale = ctx.Effective.SoftBandShrinkScale > 0
+                ? ctx.Effective.SoftBandShrinkScale
+                : PriceForecastMetrics.SoftPreferShrinkScale;
+            var qty = AlignLot((int)Math.Floor(tradeQty * scale));
+            if (qty < 100) qty = 100;
+            return (true, qty, msg is null ? " [软边界缩仓]" : $" [{msg};缩仓]");
+        }
+
+        return (true, tradeQty, "");
     }
 
     private static TradeSignal TryBuildBase(EvaluateContext ctx)
@@ -292,7 +342,6 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         if (!eff.BaseBuildEnabled)
             return None(quote.Symbol, id, poolId, "baseBuild 已关闭，等待人工建仓");
 
-        // 建底仓尽快完成：不受做T用的 avoid 窗口限制（否则 09:30-09:45 开市首刻无法建仓）
         if (eff.BaseBuildRequirePreferWindow
             && !SessionWindowHelper.IsInAnyWindow(ctx.Now, eff.PreferWindows))
             return None(quote.Symbol, id, poolId, "建底仓：等待 prefer 时段");
@@ -324,8 +373,7 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
             Action = SignalAction.Buy,
             Quantity = qty,
             Price = price,
-            Reason =
-                $"建底仓 预算{budget:F0} 涨跌{chg:F2}% 约{qty}股",
+            Reason = $"建底仓 预算{budget:F0} 涨跌{chg:F2}% 约{qty}股",
             StrategyDefinitionId = id,
             StockPoolId = poolId,
             IsBaseBuild = true
@@ -376,7 +424,6 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         string reason)
     {
         var available = position?.Quantity ?? 0;
-        // 模拟盘允许做T时用 Quantity；严格 T+1 用 SellableQuantity
         if (position is not null && position.SellableQuantity > 0)
             available = Math.Min(available, position.SellableQuantity);
 

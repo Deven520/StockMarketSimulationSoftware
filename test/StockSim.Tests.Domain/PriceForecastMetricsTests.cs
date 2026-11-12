@@ -175,7 +175,7 @@ public class PriceForecastMetricsTests
     }
 
     [Fact]
-    public void PassesForecastSoftBand_Blocks_Sell_Too_Far_From_High()
+    public void PassesForecastSoftBand_Hard_Blocks_Sell_Too_Far_From_High()
     {
         var fc = new ForecastPolicy
         {
@@ -183,7 +183,8 @@ public class PriceForecastMetricsTests
             PredictedHigh = 110m,
             PredictedLow = 100m,
             Source = "ai",
-            CountsTowardAccuracy = true
+            CountsTowardAccuracy = true,
+            SoftBandMode = "hard"
         };
         var now = new DateTime(2026, 11, 9, 10, 0, 0);
         Assert.False(PriceForecastMetrics.PassesForecastSoftBand(
@@ -193,6 +194,30 @@ public class PriceForecastMetricsTests
             fc, lastPrice: 108m, now, forSell: true, 0.35m, out _));
         Assert.True(PriceForecastMetrics.PassesForecastSoftBand(
             fc, lastPrice: 101m, now, forSell: false, 0.35m, out _));
+    }
+
+    [Fact]
+    public void SoftPrefer_Does_Not_HardBlock_But_PreferShrink()
+    {
+        var fc = new ForecastPolicy
+        {
+            ForDate = "2026-11-09",
+            PredictedHigh = 110m,
+            PredictedLow = 100m,
+            Source = "ai",
+            SoftBandMode = "softPrefer",
+            CapHighByLimitPct = 12m
+        };
+        var now = new DateTime(2026, 11, 9, 10, 0, 0);
+        var v = PriceForecastMetrics.EvaluateForecastSoftBand(
+            fc, 101m, now, forSell: true, 0.35m, out var msg, referencePrice: 100m);
+        Assert.Equal(SoftBandVerdict.PreferShrink, v);
+        Assert.Contains("高抛区", msg);
+
+        // 钳制后预测高上限 112，区间仍可用
+        var capped = PriceForecastMetrics.EvaluateForecastSoftBand(
+            fc, 109m, now, forSell: true, 0.35m, out _, referencePrice: 100m);
+        Assert.Equal(SoftBandVerdict.Pass, capped);
     }
 
     [Fact]

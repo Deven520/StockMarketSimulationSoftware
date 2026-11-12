@@ -49,6 +49,9 @@ public class StockSimDbContext : DbContext, IStockSimDataStore
             e.HasIndex(x => new { x.StockPoolId, x.Symbol }).IsUnique();
             e.HasIndex(x => x.BoundStrategyId);
             e.Property(x => x.AllowTFromDate);
+            e.Property(x => x.RiseBaselinePrice).HasPrecision(18, 4);
+            e.Property(x => x.RiseActualClose).HasPrecision(18, 4);
+            e.Property(x => x.RiseReturnPct).HasPrecision(18, 4);
             e.HasOne(x => x.BoundStrategy)
                 .WithMany()
                 .HasForeignKey(x => x.BoundStrategyId)
@@ -166,6 +169,8 @@ public class StockSimDbContext : DbContext, IStockSimDataStore
             e.Property(x => x.DayRealizedPnL).HasPrecision(18, 2);
             e.Property(x => x.LastSellPrice).HasPrecision(18, 4);
             e.Property(x => x.LastBuyPrice).HasPrecision(18, 4);
+            e.Property(x => x.PathRegime).HasMaxLength(32);
+            e.Property(x => x.PathPhase).HasMaxLength(16);
             e.HasIndex(x => new { x.Symbol, x.TradeDate }).IsUnique();
         });
 

@@ -16,17 +16,20 @@ public class StockPoolAppService
     private readonly IStockSimDataStore _db;
     private readonly PerStockStrategyService _perStockStrategy;
     private readonly IStockSuggestProvider _suggest;
+    private readonly IStockDetailProvider _detailProvider;
     private readonly ILogger<StockPoolAppService> _logger;
 
     public StockPoolAppService(
         IStockSimDataStore db,
         PerStockStrategyService perStockStrategy,
         IStockSuggestProvider suggest,
+        IStockDetailProvider detailProvider,
         ILogger<StockPoolAppService> logger)
     {
         _db = db;
         _perStockStrategy = perStockStrategy;
         _suggest = suggest;
+        _detailProvider = detailProvider;
         _logger = logger;
     }
 
@@ -66,8 +69,86 @@ public class StockPoolAppService
             .Select(i => new StockPoolItemDto(
                 i.Id, i.StockPoolId, i.Symbol, i.Name, i.Tags, i.Source,
                 i.BoundStrategyId, i.StrategyUpdatedAt, i.InitialCash, i.AvailableCash, i.NotifyOnTrade, i.TradeStyle,
-                i.PredictedRiseDate))
+                i.PredictedRiseDate, i.RiseReturnPct, i.RiseSuccess, i.RiseEvaluatedAt))
             .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// 股票池次日预涨：预涨日收盘后（≥15:00）立即用真源日K结算，写入成功/失败。
+    /// </summary>
+    public async Task<int> SettleNextDayRiseAsync(DateTime localNow, CancellationToken ct = default)
+    {
+        var candidates = await _db.StockPoolItems
+            .Where(i => i.TradeStyle == StockTradeStyle.NextDayRise
+                        && i.PredictedRiseDate != null)
+            .ToListAsync(ct);
+        if (candidates.Count == 0) return 0;
+
+        var settled = 0;
+        foreach (var item in candidates)
+        {
+            var target = item.PredictedRiseDate!.Value.Date;
+            if (!PriceForecastMetrics.CanFinalizeForecast(target, localNow))
+                continue;
+
+            // 已按同一预涨日结算过则跳过（改预涨日后可重算）
+            if (item.RiseEvaluatedAt.HasValue
+                && item.RiseSuccess.HasValue
+                && item.RiseReturnPct.HasValue
+                && item.RiseActualClose.HasValue)
+            {
+                continue;
+            }
+
+            StockDetailBundle? detail;
+            try
+            {
+                detail = await _detailProvider.GetDetailAsync(item.Symbol, item.Name, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "NextDayRise settle detail failed for {Symbol}", item.Symbol);
+                continue;
+            }
+
+            if (detail is null || detail.IsSimulated)
+            {
+                _logger.LogInformation("Skip NextDayRise settle {Symbol}: no real daily bars", item.Symbol);
+                continue;
+            }
+
+            var bars = detail.DailyBars
+                .Where(d => d.Date.Date <= target && d.Close > 0)
+                .OrderBy(d => d.Date)
+                .ToList();
+            var dayBar = bars.LastOrDefault(d => d.Date.Date == target);
+            if (dayBar is null)
+            {
+                _logger.LogInformation("Skip NextDayRise settle {Symbol}: missing bar for {Date}", item.Symbol, target);
+                continue;
+            }
+
+            var baseline = bars.LastOrDefault(d => d.Date.Date < target)?.Close ?? 0m;
+            if (baseline <= 0)
+            {
+                _logger.LogInformation("Skip NextDayRise settle {Symbol}: no baseline before {Date}", item.Symbol, target);
+                continue;
+            }
+
+            var (ret, dirHit, _) = NextDayPickMetrics.Evaluate(baseline, dayBar.Close, expectedReturnPct: 0m);
+            item.RiseBaselinePrice = baseline;
+            item.RiseActualClose = dayBar.Close;
+            item.RiseReturnPct = ret;
+            item.RiseSuccess = dirHit;
+            item.RiseEvaluatedAt = localNow;
+            item.LastModificationTime = DateTime.UtcNow;
+            settled++;
+        }
+
+        if (settled > 0)
+            await _db.SaveChangesAsync(ct);
+
+        return settled;
     }
 
     /// <summary>开关：策略成交是否推送通知。</summary>
@@ -216,12 +297,14 @@ public class StockPoolAppService
                 if (exists.PredictedRiseDate != riseDate)
                 {
                     exists.PredictedRiseDate = riseDate;
+                    ClearRiseSettlement(exists);
                     changed = true;
                 }
             }
-            else if (exists.PredictedRiseDate.HasValue)
+            else if (exists.PredictedRiseDate.HasValue || exists.RiseSuccess.HasValue)
             {
                 exists.PredictedRiseDate = null;
+                ClearRiseSettlement(exists);
                 changed = true;
             }
 
@@ -402,7 +485,17 @@ public class StockPoolAppService
         return (ok, fail, errors);
     }
 
+    private static void ClearRiseSettlement(StockPoolItem item)
+    {
+        item.RiseBaselinePrice = null;
+        item.RiseActualClose = null;
+        item.RiseReturnPct = null;
+        item.RiseSuccess = null;
+        item.RiseEvaluatedAt = null;
+    }
+
     private static StockPoolItemDto MapItem(StockPoolItem i) =>
         new(i.Id, i.StockPoolId, i.Symbol, i.Name, i.Tags, i.Source, i.BoundStrategyId, i.StrategyUpdatedAt,
-            i.InitialCash, i.AvailableCash, i.NotifyOnTrade, i.TradeStyle, i.PredictedRiseDate);
+            i.InitialCash, i.AvailableCash, i.NotifyOnTrade, i.TradeStyle, i.PredictedRiseDate,
+            i.RiseReturnPct, i.RiseSuccess, i.RiseEvaluatedAt);
 }

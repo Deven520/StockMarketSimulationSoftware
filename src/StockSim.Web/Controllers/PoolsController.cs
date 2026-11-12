@@ -43,6 +43,8 @@ public class PoolsController : Controller
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         var pool = await _pools.GetOrCreateDefaultPoolAsync(ct);
+        // 收盘后打开池页即尝试结算次日预涨（幂等）
+        await _pools.SettleNextDayRiseAsync(DateTime.Now, ct);
         ViewData["Title"] = "股票池";
         ViewBag.PoolId = pool.Id;
         ViewBag.PoolName = pool.Name;

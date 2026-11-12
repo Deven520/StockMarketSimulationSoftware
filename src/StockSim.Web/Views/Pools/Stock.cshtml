@@ -285,19 +285,32 @@
 
   function nearestTimeIndex(times, hhmm) {
     if (!times || !times.length || !hhmm) return -1;
-    const exact = times.indexOf(hhmm);
+    // 兼容 "9:30" / "09:30" / "09:30:15"
+    const norm = (s) => {
+      const p = String(s).trim().split(':');
+      const h = String(Number(p[0]) || 0).padStart(2, '0');
+      const m = String(Number(p[1]) || 0).padStart(2, '0');
+      return `${h}:${m}`;
+    };
+    const targetStr = norm(hhmm);
+    const exact = times.findIndex(t => norm(t) === targetStr);
     if (exact >= 0) return exact;
     const toMin = (s) => {
-      const p = String(s).split(':');
+      const p = norm(s).split(':');
       return (Number(p[0]) || 0) * 60 + (Number(p[1]) || 0);
     };
     const target = toMin(hhmm);
+    const first = toMin(times[0]);
+    const last = toMin(times[times.length - 1]);
+    // 明显不在分时轴时段内（如未转本地的 UTC 清晨）则不绘制，避免误贴开盘
+    if (target < first - 2 || target > last + 2) return -1;
     let best = 0, bestDiff = Infinity;
     for (let i = 0; i < times.length; i++) {
       const d = Math.abs(toMin(times[i]) - target);
       if (d < bestDiff) { bestDiff = d; best = i; }
     }
-    return best;
+    // 超过 3 分钟仍找不到合适分钟K，宁可不画
+    return bestDiff <= 3 ? best : -1;
   }
 
   function buildTradeScatter(timesOrDates, marks, mode, ohlcData) {

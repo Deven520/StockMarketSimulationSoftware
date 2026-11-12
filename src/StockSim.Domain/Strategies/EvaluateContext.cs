@@ -27,4 +27,10 @@ public sealed class EvaluateContext
 
     /// <summary>是否仍需建底仓（持仓不足 100）。</summary>
     public bool NeedsBaseBuild { get; init; }
+
+    /// <summary>相对今日高点的回撤 %（冲高回落卖用）。</summary>
+    public decimal PullbackFromHighPct { get; init; }
+
+    /// <summary>软边界钳制参考价（昨收或开盘）。</summary>
+    public decimal ReferencePrice { get; init; }
 }

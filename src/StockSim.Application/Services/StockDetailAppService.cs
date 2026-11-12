@@ -161,9 +161,20 @@ public class StockDetailAppService
             {
                 var rise = item.PredictedRiseDate?.Date;
                 var riseLabel = rise?.ToString("MM-dd") ?? "次日";
-                statusText = qty >= 100
-                    ? $"次日预涨持仓({riseLabel})"
-                    : marketOpen ? $"待低位建仓·预涨{riseLabel}" : $"次日预涨·{riseLabel}";
+                if (item.RiseSuccess == true)
+                {
+                    statusText = $"预涨成功 {(item.RiseReturnPct ?? 0m):+0.00;-0.00;0}%";
+                }
+                else if (item.RiseSuccess == false)
+                {
+                    statusText = $"预涨失败 {(item.RiseReturnPct ?? 0m):+0.00;-0.00;0}%";
+                }
+                else
+                {
+                    statusText = qty >= 100
+                        ? $"次日预涨持仓({riseLabel})"
+                        : marketOpen ? $"待低位建仓·预涨{riseLabel}" : $"次日预涨·待结算{riseLabel}";
+                }
             }
             else if (isTrend)
             {
@@ -212,6 +223,10 @@ public class StockDetailAppService
                 atrAvgBySymbol.ContainsKey(item.Symbol) ? atrAvg : null,
                 item.TradeStyle,
                 item.PredictedRiseDate,
+                item.RiseReturnPct,
+                item.RiseSuccess,
+                item.RiseEvaluatedAt,
+                item.RiseActualClose,
                 risk is { Status: DownsideRiskStatus.Pending } ? null : risk?.RiskLevel,
                 risk?.Status.ToString(),
                 risk?.PredictedForDate,
@@ -484,9 +499,12 @@ public class StockDetailAppService
 
         return rows.Select(t =>
         {
-            var local = t.TradedAt.Kind == DateTimeKind.Utc
-                ? t.TradedAt.ToLocalTime()
-                : t.TradedAt;
+            // TradedAt 入库为 UtcNow；SQLite 读出多为 Unspecified，需按 UTC 转本地，
+            // 与交易明细页 ToLocalTime() 一致，否则分时图 HH:mm 会偏 8 小时并贴到开盘附近。
+            var utc = t.TradedAt.Kind == DateTimeKind.Utc
+                ? t.TradedAt
+                : DateTime.SpecifyKind(t.TradedAt, DateTimeKind.Utc);
+            var local = utc.ToLocalTime();
             var isT = t.StrategyDefinitionId.HasValue;
             var side = t.Side == OrderSide.Buy ? "Buy" : "Sell";
             var kind = isT ? "T" : (t.Side == OrderSide.Buy ? "B" : "S");

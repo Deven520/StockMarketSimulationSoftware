@@ -48,6 +48,10 @@ public sealed class StrategyParameters
     [JsonPropertyName("baseBuild")]
     public BaseBuildPolicy BaseBuild { get; set; } = new();
 
+    /// <summary>盘中开盘路径分型与剧本开关。</summary>
+    [JsonPropertyName("path")]
+    public PathPolicy Path { get; set; } = new();
+
     // —— v1 兼容字段（反序列化后迁移进 Triggers/Sizing/Risk）——
     [JsonPropertyName("buyTriggerPct")]
     public decimal? LegacyBuyTriggerPct { get; set; }
@@ -106,6 +110,7 @@ public sealed class StrategyParameters
             aiNotes = AiNotes,
             forecast = Forecast,
             baseBuild = BaseBuild,
+            path = Path,
             feeModel = FeeModel
         };
         return JsonSerializer.Serialize(export, new JsonSerializerOptions { WriteIndented = true });
@@ -116,6 +121,7 @@ public sealed class StrategyParameters
         MigrateLegacy();
         NormalizeRanges();
         var o = overrides ?? new RuntimeOverrides();
+        var style = !string.IsNullOrWhiteSpace(o.StyleHint) ? o.StyleHint! : Style;
         return new EffectiveStrategyParams
         {
             BuyDeviationPct = Triggers.BuyDeviationPct.Resolve(o.BuyDeviationPct),
@@ -130,7 +136,7 @@ public sealed class StrategyParameters
             UseVolumeConfirm = Factors.UseVolumeConfirm,
             MinVolumeRatio = Factors.MinVolumeRatio,
             Anchor = Triggers.Anchor,
-            Style = Style,
+            Style = style,
             Paused = o.Paused,
             PauseReason = o.PauseReason,
             PreferWindows = Session.Prefer,
@@ -141,7 +147,13 @@ public sealed class StrategyParameters
             BaseBuildMinCashReserve = Math.Max(0, BaseBuild.MinCashReserve),
             BaseBuildMinChangePct = BaseBuild.MinChangePct,
             BaseBuildMaxChangePct = BaseBuild.MaxChangePct,
-            BaseBuildRequirePreferWindow = BaseBuild.RequirePreferWindow
+            BaseBuildRequirePreferWindow = BaseBuild.RequirePreferWindow,
+            AllowBreakAvoid = o.AllowBreakAvoid,
+            BreakAvoidSigma = o.BreakAvoidSigma ?? Path.BreakAvoidSigma,
+            PullbackSellPct = o.PullbackSellPct ?? Path.PullbackSellPct,
+            BlockNewT = o.BlockNewT,
+            SoftBandShrinkScale = o.SoftBandShrinkScale ?? 0.6m,
+            PathLabel = o.PathLabel
         };
     }
 
@@ -301,6 +313,34 @@ public sealed class ForecastPolicy
     /// <summary>占位预测应为 false，不进准确率榜。</summary>
     [JsonPropertyName("countsTowardAccuracy")]
     public bool? CountsTowardAccuracy { get; set; }
+
+    /// <summary>hard | softPrefer（默认 softPrefer：偏离达标时不硬拦，仅缩仓）。</summary>
+    [JsonPropertyName("softBandMode")]
+    public string SoftBandMode { get; set; } = "softPrefer";
+
+    /// <summary>相对参考价（昨收/开盘）钳制预测高的涨幅上限 %。</summary>
+    [JsonPropertyName("capHighByLimitPct")]
+    public decimal CapHighByLimitPct { get; set; } = 12m;
+}
+
+/// <summary>盘中路径分型策略边界。</summary>
+public sealed class PathPolicy
+{
+    [JsonPropertyName("enable")]
+    public bool Enable { get; set; } = true;
+
+    [JsonPropertyName("confirmUntil")]
+    public string ConfirmUntil { get; set; } = "10:15";
+
+    [JsonPropertyName("breakAvoidSigma")]
+    public decimal BreakAvoidSigma { get; set; } = 1.5m;
+
+    [JsonPropertyName("pullbackSellPct")]
+    public decimal PullbackSellPct { get; set; } = 0.8m;
+
+    /// <summary>夜更可选：四类路径先验，仅加权开盘假设。</summary>
+    [JsonPropertyName("pathPriors")]
+    public Dictionary<string, decimal>? PathPriors { get; set; }
 }
 
 public sealed class ParamRange
@@ -368,6 +408,13 @@ public sealed class RuntimeOverrides
     public bool Paused { get; set; }
     public string? PauseReason { get; set; }
     public DateTime AsOf { get; set; } = DateTime.Now;
+    public string? StyleHint { get; set; }
+    public bool AllowBreakAvoid { get; set; }
+    public decimal? BreakAvoidSigma { get; set; }
+    public decimal? PullbackSellPct { get; set; }
+    public bool BlockNewT { get; set; }
+    public decimal? SoftBandShrinkScale { get; set; }
+    public string? PathLabel { get; set; }
 }
 
 /// <summary>边界钳制后的有效参数。</summary>
@@ -398,6 +445,13 @@ public sealed class EffectiveStrategyParams
     public decimal BaseBuildMinChangePct { get; init; } = -5m;
     public decimal BaseBuildMaxChangePct { get; init; } = 2.5m;
     public bool BaseBuildRequirePreferWindow { get; init; }
+
+    public bool AllowBreakAvoid { get; init; }
+    public decimal BreakAvoidSigma { get; init; } = 1.5m;
+    public decimal PullbackSellPct { get; init; }
+    public bool BlockNewT { get; init; }
+    public decimal SoftBandShrinkScale { get; init; } = 0.6m;
+    public string? PathLabel { get; init; }
 }
 
 public enum SignalAction

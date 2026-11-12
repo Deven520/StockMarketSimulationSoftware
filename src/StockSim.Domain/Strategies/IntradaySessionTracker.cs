@@ -3,7 +3,7 @@ using StockSim.Domain.MarketData;
 
 namespace StockSim.Domain.Strategies;
 
-/// <summary>盘中会话：开盘价、近似 VWAP、短窗波动与量比。</summary>
+/// <summary>盘中会话：开盘价、近似 VWAP、短窗波动与量比、日高低与缺口。</summary>
 public sealed class IntradaySessionTracker
 {
     private readonly ConcurrentDictionary<string, SessionStats> _stats = new(StringComparer.OrdinalIgnoreCase);
@@ -39,6 +39,9 @@ public sealed class IntradaySessionTracker
     {
         public DateTime TradeDate { get; }
         private decimal _open;
+        private decimal _prevClose;
+        private decimal _dayHigh;
+        private decimal _dayLow;
         private decimal _vwapNum;
         private decimal _vwapDen;
         private long _lastVolume;
@@ -52,6 +55,16 @@ public sealed class IntradaySessionTracker
         public void Observe(QuoteTick quote, DateTime now)
         {
             if (_open <= 0) _open = quote.LastPrice;
+            if (_prevClose <= 0 && quote.ChangePercent > -100m && quote.ChangePercent < 1000m)
+            {
+                var denom = 1m + quote.ChangePercent / 100m;
+                if (denom > 0.01m)
+                    _prevClose = quote.LastPrice / denom;
+            }
+
+            if (_dayHigh <= 0 || quote.LastPrice > _dayHigh) _dayHigh = quote.LastPrice;
+            if (_dayLow <= 0 || quote.LastPrice < _dayLow) _dayLow = quote.LastPrice;
+
             var volDelta = quote.Volume > _lastVolume ? quote.Volume - _lastVolume : Math.Max(quote.Volume, 1);
             _lastVolume = Math.Max(_lastVolume, quote.Volume);
             if (volDelta <= 0) volDelta = 1;
@@ -76,17 +89,30 @@ public sealed class IntradaySessionTracker
 
         public SessionSnapshot Snapshot(QuoteTick quote)
         {
-            var vwap = _vwapDen > 0 ? _vwapNum / _vwapDen : quote.LastPrice;
-            var vol = RealizedVol();
-            var ratio = VolumeRatio();
+            var open = _open > 0 ? _open : quote.LastPrice;
+            var last = quote.LastPrice;
+            var vwap = _vwapDen > 0 ? _vwapNum / _vwapDen : last;
+            var prev = _prevClose > 0 ? _prevClose : open;
+            var high = _dayHigh > 0 ? _dayHigh : last;
+            var low = _dayLow > 0 ? _dayLow : last;
+            var gap = prev > 0 ? (open - prev) / prev * 100m : 0m;
+            var retOpen = open > 0 ? (last - open) / open * 100m : 0m;
+            var pullback = high > 0 ? (high - last) / high * 100m : 0m;
+
             return new SessionSnapshot
             {
                 Symbol = quote.Symbol,
-                Open = _open > 0 ? _open : quote.LastPrice,
+                Open = open,
+                PrevClose = prev,
+                DayHigh = high,
+                DayLow = low,
                 Vwap = vwap,
-                Last = quote.LastPrice,
-                RealizedVolPct = vol,
-                VolumeRatio = ratio,
+                Last = last,
+                OpenGapPct = gap,
+                RetFromOpenPct = retOpen,
+                PullbackFromHighPct = pullback,
+                RealizedVolPct = RealizedVol(),
+                VolumeRatio = VolumeRatio(),
                 AsOf = quote.Timestamp == default ? DateTime.Now : quote.Timestamp
             };
         }
@@ -117,8 +143,14 @@ public sealed class SessionSnapshot
 {
     public required string Symbol { get; init; }
     public decimal Open { get; init; }
+    public decimal PrevClose { get; init; }
+    public decimal DayHigh { get; init; }
+    public decimal DayLow { get; init; }
     public decimal Vwap { get; init; }
     public decimal Last { get; init; }
+    public decimal OpenGapPct { get; init; }
+    public decimal RetFromOpenPct { get; init; }
+    public decimal PullbackFromHighPct { get; init; }
     public decimal RealizedVolPct { get; init; }
     public decimal VolumeRatio { get; init; }
     public DateTime AsOf { get; init; }

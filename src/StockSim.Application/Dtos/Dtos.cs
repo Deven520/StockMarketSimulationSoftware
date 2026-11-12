@@ -17,7 +17,10 @@ public record StockPoolItemDto(
     decimal AvailableCash = 200_000m,
     bool NotifyOnTrade = false,
     StockTradeStyle TradeStyle = StockTradeStyle.IntradayT,
-    DateTime? PredictedRiseDate = null);
+    DateTime? PredictedRiseDate = null,
+    decimal? RiseReturnPct = null,
+    bool? RiseSuccess = null,
+    DateTime? RiseEvaluatedAt = null);
 public record CreateStockPoolRequest(string Name, string? Description);
 public record AddPoolItemRequest(string Symbol, string Name, string? Tags, string? Remark);
 
@@ -59,6 +62,10 @@ public record PoolStockRowDto(
     decimal? AvgAtrAccuracyPct = null,
     StockTradeStyle TradeStyle = StockTradeStyle.IntradayT,
     DateTime? PredictedRiseDate = null,
+    decimal? RiseReturnPct = null,
+    bool? RiseSuccess = null,
+    DateTime? RiseEvaluatedAt = null,
+    decimal? RiseActualClose = null,
     DownsideRiskLevel? RiskLevel = null,
     string? RiskStatus = null,
     DateTime? RiskPredictedForDate = null,

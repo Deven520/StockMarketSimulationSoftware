@@ -56,12 +56,27 @@ public class StrategyEngineService
         _logger = logger;
     }
 
+    /// <summary>创业板指，用于路径过滤器。</summary>
+    public const string PathFilterIndexSymbol = "399006";
+
     public async Task<int> EvaluateOnceAsync(CancellationToken ct = default)
     {
         var now = DateTime.Now;
         if (!AShareMarketSession.IsContinuousAuction(now))
         {
             return 0;
+        }
+
+        decimal? indexChangePct = null;
+        try
+        {
+            var idx = await _marketData.GetLastAsync(PathFilterIndexSymbol, ct);
+            if (idx is not null)
+                indexChangePct = idx.ChangePercent;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Path filter index {Symbol} unavailable", PathFilterIndexSymbol);
         }
 
         var account = await _db.Accounts.Include(a => a.Positions).FirstOrDefaultAsync(ct);
@@ -146,7 +161,16 @@ public class StrategyEngineService
                 }
 
                 var snap = _sessionTracker.Update(quote, now);
-                var overrides = _adaptive.Adjust(policy, runtime, snap, now);
+                var (regime, phase, pathReason) = IntradayPathClassifier.Classify(
+                    snap, now, runtime.PathRegime, runtime.PathPhase, policy.Path);
+                runtime.PathRegime = regime;
+                runtime.PathPhase = phase;
+                runtime.PathReason = pathReason;
+
+                var playbook = PathPlaybookResolver.Resolve(regime, policy.Path);
+                playbook = PathPlaybookResolver.ApplyIndexFilter(playbook, regime, indexChangePct);
+
+                var overrides = _adaptive.Adjust(policy, runtime, snap, now, playbook);
                 var effective = policy.ToEffective(overrides);
                 var anchor = _sessionTracker.ResolveAnchor(effective.Anchor, snap);
                 if (anchor <= 0) anchor = quote.LastPrice;
@@ -178,7 +202,9 @@ public class StrategyEngineService
                     TradesToday = tradesToday,
                     AvailableCash = poolItem?.AvailableCash ?? account.Cash,
                     CanDoT = canDoT,
-                    NeedsBaseBuild = needsBaseBuild
+                    NeedsBaseBuild = needsBaseBuild,
+                    PullbackFromHighPct = snap.PullbackFromHighPct,
+                    ReferencePrice = snap.PrevClose > 0 ? snap.PrevClose : snap.Open
                 };
 
                 var stateBefore = runtime.State;
@@ -472,6 +498,8 @@ public class StrategyEngineService
         if (signal.Action == SignalAction.Sell)
         {
             runtime.LastSellPrice = trade.Price;
+            if (!signal.IsBaseBuild)
+                runtime.OpenTQty += trade.Quantity;
             if (runtime.LastBuyPrice.HasValue && trade.Price < runtime.LastBuyPrice.Value)
                 runtime.ConsecutiveLosses++;
             else
@@ -480,6 +508,16 @@ public class StrategyEngineService
         else if (signal.Action == SignalAction.Buy)
         {
             runtime.LastBuyPrice = trade.Price;
+            if (!signal.IsBaseBuild && runtime.OpenTQty > 0)
+            {
+                runtime.OpenTQty = Math.Max(0, runtime.OpenTQty - trade.Quantity);
+                if (runtime.OpenTQty <= 0)
+                {
+                    runtime.OpenTQty = 0;
+                    runtime.LastSellPrice = null;
+                }
+            }
+
             if (runtime.LastSellPrice.HasValue && trade.Price > runtime.LastSellPrice.Value)
                 runtime.ConsecutiveLosses++;
             else if (runtime.LastSellPrice.HasValue && trade.Price <= runtime.LastSellPrice.Value)
@@ -513,6 +551,11 @@ public class StrategyEngineService
             state.DayRealizedPnL = row.DayRealizedPnL;
             state.LastSellPrice = row.LastSellPrice;
             state.LastBuyPrice = row.LastBuyPrice;
+            state.OpenTQty = row.OpenTQty;
+            if (Enum.TryParse<IntradayPathRegime>(row.PathRegime, true, out var pr))
+                state.PathRegime = pr;
+            if (Enum.TryParse<PathPhase>(row.PathPhase, true, out var pp))
+                state.PathPhase = pp;
             if (!string.IsNullOrWhiteSpace(row.OverridesJson))
             {
                 try
@@ -549,6 +592,9 @@ public class StrategyEngineService
         row.DayRealizedPnL = runtime.DayRealizedPnL;
         row.LastSellPrice = runtime.LastSellPrice;
         row.LastBuyPrice = runtime.LastBuyPrice;
+        row.OpenTQty = runtime.OpenTQty;
+        row.PathRegime = runtime.PathRegime.ToString();
+        row.PathPhase = runtime.PathPhase.ToString();
         row.OverridesJson = JsonSerializer.Serialize(runtime.Overrides);
         row.LastModificationTime = DateTime.UtcNow;
         // SaveChanges 由调用方统一提交（或此处立即提交以确保崩溃恢复）

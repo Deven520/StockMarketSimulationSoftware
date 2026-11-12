@@ -297,9 +297,12 @@ public static class PriceForecastMetrics
         };
     }
 
+    /// <summary>softPrefer 未入带时的默认缩仓系数。</summary>
+    public const decimal SoftPreferShrinkScale = 0.6m;
+
     /// <summary>
-    /// 预测软边界：高抛须接近预测上沿，低吸须接近预测下沿。
-    /// 无有效当日预测时放行。
+    /// 预测软边界（兼容旧调用）：默认按 forecast.softBandMode。
+    /// hard 模式未入带返回 false；softPrefer 未入带仍返回 true（由调用方缩仓）。
     /// </summary>
     public static bool PassesForecastSoftBand(
         ForecastPolicy? forecast,
@@ -309,32 +312,67 @@ public static class PriceForecastMetrics
         decimal bandRatio,
         out string? blockReason)
     {
-        blockReason = null;
-        if (forecast is null || lastPrice <= 0) return true;
-        if (forecast.PredictedHigh <= 0 || forecast.PredictedLow <= 0) return true;
-        if (IsPlaceholderForecast(forecast)) return true;
+        var verdict = EvaluateForecastSoftBand(
+            forecast, lastPrice, now, forSell, bandRatio, out blockReason);
+        return verdict != SoftBandVerdict.Block;
+    }
+
+    /// <summary>
+    /// 预测软边界：高抛须接近预测上沿，低吸须接近预测下沿。
+    /// 支持 softPrefer（默认）与 hard；预测高可按参考价钳制。
+    /// </summary>
+    public static SoftBandVerdict EvaluateForecastSoftBand(
+        ForecastPolicy? forecast,
+        decimal lastPrice,
+        DateTime now,
+        bool forSell,
+        decimal bandRatio,
+        out string? message,
+        decimal? referencePrice = null,
+        decimal? avgCombinedAccuracyPct = null)
+    {
+        message = null;
+        if (forecast is null || lastPrice <= 0) return SoftBandVerdict.Pass;
+        if (forecast.PredictedHigh <= 0 || forecast.PredictedLow <= 0) return SoftBandVerdict.Pass;
+        if (IsPlaceholderForecast(forecast)) return SoftBandVerdict.Pass;
 
         if (!string.IsNullOrWhiteSpace(forecast.ForDate)
             && DateTime.TryParse(forecast.ForDate, out var forDate)
             && forDate.Date != now.Date)
         {
-            // 预测目标日不是今天：不拦截盘中（例如收盘后已切到次日预测）
-            return true;
+            return SoftBandVerdict.Pass;
         }
+
+        var mode = string.IsNullOrWhiteSpace(forecast.SoftBandMode)
+            ? "softPrefer"
+            : forecast.SoftBandMode.Trim();
+        var hard = string.Equals(mode, "hard", StringComparison.OrdinalIgnoreCase);
 
         var high = Math.Max(forecast.PredictedHigh, forecast.PredictedLow);
         var low = Math.Min(forecast.PredictedHigh, forecast.PredictedLow);
+
+        var capPct = forecast.CapHighByLimitPct > 0 ? forecast.CapHighByLimitPct : 12m;
+        if (referencePrice is > 0)
+        {
+            var capped = referencePrice.Value * (1m + capPct / 100m);
+            if (capped > low)
+                high = Math.Min(high, capped);
+        }
+
         var range = high - low;
-        if (range <= 0) return true;
+        if (range <= 0) return SoftBandVerdict.Pass;
 
         var ratio = Math.Clamp(bandRatio, 0.05m, 0.5m);
+        if (avgCombinedAccuracyPct is < LowAccuracyDeweightThreshold)
+            ratio = Math.Min(0.5m, ratio + 0.15m);
+
         if (forSell)
         {
             var floor = high - range * ratio;
             if (lastPrice < floor)
             {
-                blockReason = $"预测软边界：现价 {lastPrice:F2} 未进入高抛区(≥{floor:F2}，预测高 {high:F2})";
-                return false;
+                message = $"预测软边界：现价 {lastPrice:F2} 未进入高抛区(≥{floor:F2}，预测高 {high:F2})";
+                return hard ? SoftBandVerdict.Block : SoftBandVerdict.PreferShrink;
             }
         }
         else
@@ -342,12 +380,12 @@ public static class PriceForecastMetrics
             var ceil = low + range * ratio;
             if (lastPrice > ceil)
             {
-                blockReason = $"预测软边界：现价 {lastPrice:F2} 未进入低吸区(≤{ceil:F2}，预测低 {low:F2})";
-                return false;
+                message = $"预测软边界：现价 {lastPrice:F2} 未进入低吸区(≤{ceil:F2}，预测低 {low:F2})";
+                return hard ? SoftBandVerdict.Block : SoftBandVerdict.PreferShrink;
             }
         }
 
-        return true;
+        return SoftBandVerdict.Pass;
     }
 
     /// <summary>近史准确率过低时，返回更保守的 aggression 缩放系数（&lt;1）。</summary>

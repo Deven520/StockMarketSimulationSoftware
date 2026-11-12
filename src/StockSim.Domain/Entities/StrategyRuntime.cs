@@ -12,6 +12,10 @@ public class StrategyRuntimeStateRow : AuditedEntity
     public decimal DayRealizedPnL { get; set; }
     public decimal? LastSellPrice { get; set; }
     public decimal? LastBuyPrice { get; set; }
+    /// <summary>未平正 T 卖出腿股数。</summary>
+    public int OpenTQty { get; set; }
+    public string PathRegime { get; set; } = "Unknown";
+    public string PathPhase { get; set; } = "Hypothesis";
     public string? OverridesJson { get; set; }
 }
 

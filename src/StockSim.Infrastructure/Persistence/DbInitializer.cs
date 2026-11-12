@@ -158,6 +158,11 @@ public static class DbInitializer
                 await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "AllowTFromDate", "TEXT");
                 await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "TradeStyle", "INTEGER NOT NULL DEFAULT 1");
                 await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "PredictedRiseDate", "TEXT NULL");
+                await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "RiseBaselinePrice", "TEXT NULL");
+                await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "RiseActualClose", "TEXT NULL");
+                await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "RiseReturnPct", "TEXT NULL");
+                await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "RiseSuccess", "INTEGER NULL");
+                await TryAddSqliteColumnAsync(db, "AppStockPoolItems", "RiseEvaluatedAt", "TEXT NULL");
                 await db.Database.ExecuteSqlRawAsync("""
                     UPDATE AppStockPoolItems
                     SET TradeStyle = 3
@@ -187,6 +192,11 @@ public static class DbInitializer
                     IF COL_LENGTH('AppStockPoolItems', 'AllowTFromDate') IS NULL ALTER TABLE AppStockPoolItems ADD AllowTFromDate datetime2 NULL;
                     IF COL_LENGTH('AppStockPoolItems', 'TradeStyle') IS NULL ALTER TABLE AppStockPoolItems ADD TradeStyle int NOT NULL DEFAULT 1;
                     IF COL_LENGTH('AppStockPoolItems', 'PredictedRiseDate') IS NULL ALTER TABLE AppStockPoolItems ADD PredictedRiseDate datetime2 NULL;
+                    IF COL_LENGTH('AppStockPoolItems', 'RiseBaselinePrice') IS NULL ALTER TABLE AppStockPoolItems ADD RiseBaselinePrice decimal(18,4) NULL;
+                    IF COL_LENGTH('AppStockPoolItems', 'RiseActualClose') IS NULL ALTER TABLE AppStockPoolItems ADD RiseActualClose decimal(18,4) NULL;
+                    IF COL_LENGTH('AppStockPoolItems', 'RiseReturnPct') IS NULL ALTER TABLE AppStockPoolItems ADD RiseReturnPct decimal(18,4) NULL;
+                    IF COL_LENGTH('AppStockPoolItems', 'RiseSuccess') IS NULL ALTER TABLE AppStockPoolItems ADD RiseSuccess bit NULL;
+                    IF COL_LENGTH('AppStockPoolItems', 'RiseEvaluatedAt') IS NULL ALTER TABLE AppStockPoolItems ADD RiseEvaluatedAt datetime2 NULL;
                     UPDATE AppStockPoolItems SET TradeStyle = 3 WHERE TradeStyle = 2 AND Tags LIKE N'%次日上涨%';
                     UPDATE AppStockPoolItems SET PredictedRiseDate = AllowTFromDate WHERE TradeStyle = 3 AND PredictedRiseDate IS NULL AND AllowTFromDate IS NOT NULL;
                     UPDATE AppStockPoolItems SET InitialCash = 200000 WHERE InitialCash = 0;
@@ -249,6 +259,9 @@ public static class DbInitializer
                     CREATE INDEX IF NOT EXISTS IX_AppStrategyDecisionLogs_Symbol_TradeDate
                     ON AppStrategyDecisionLogs (Symbol, TradeDate, DecidedAt);
                     """);
+                await TryAddSqliteColumnAsync(db, "AppStrategyRuntimeStates", "OpenTQty", "INTEGER NOT NULL DEFAULT 0");
+                await TryAddSqliteColumnAsync(db, "AppStrategyRuntimeStates", "PathRegime", "TEXT");
+                await TryAddSqliteColumnAsync(db, "AppStrategyRuntimeStates", "PathPhase", "TEXT");
             }
         }
         catch (Exception ex)

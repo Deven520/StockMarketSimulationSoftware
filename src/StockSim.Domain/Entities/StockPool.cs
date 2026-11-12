@@ -27,6 +27,21 @@ public class StockPoolItem : AuditedEntity
     /// <summary>次日预涨目标交易日（仅 NextDayRise 有值）。</summary>
     public DateTime? PredictedRiseDate { get; set; }
 
+    /// <summary>预涨日结算：基准价（预涨日前一交易日收盘）。</summary>
+    public decimal? RiseBaselinePrice { get; set; }
+
+    /// <summary>预涨日结算：预涨日收盘价。</summary>
+    public decimal? RiseActualClose { get; set; }
+
+    /// <summary>预涨日结算：相对基准收益%。</summary>
+    public decimal? RiseReturnPct { get; set; }
+
+    /// <summary>预涨日结算：方向成功（收益&gt;0）。</summary>
+    public bool? RiseSuccess { get; set; }
+
+    /// <summary>预涨日结算完成时间（本地）。</summary>
+    public DateTime? RiseEvaluatedAt { get; set; }
+
     /// <summary>一股一策：本成分绑定的专属策略。</summary>
     public Guid? BoundStrategyId { get; set; }
     public StrategyDefinition? BoundStrategy { get; set; }
