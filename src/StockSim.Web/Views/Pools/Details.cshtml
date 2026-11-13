@@ -94,19 +94,19 @@
 <table class="table table-sm table-hover align-middle stock-pool-table" id="poolTable" data-pool-id="@poolId">
     <thead class="table-dark">
         <tr>
-            <th>代码</th>
-            <th>名称</th>
-            <th>类型</th>
-            <th title="次日预涨目标交易日">预涨日</th>
-            <th title="预涨日收盘后结算：相对昨收涨跌；涨则成功">预涨结果</th>
-            <th>最新价</th>
-            <th>涨跌幅</th>
-            <th>持仓</th>
-            <th>成本</th>
-            <th>市值</th>
-            <th title="(最新价−成本)/成本×100">浮动盈亏/%</th>
-            <th>今日盈亏</th>
-            <th>可用资金</th>
+            <th class="pool-sort" data-sort="symbol" title="点击排序">代码</th>
+            <th class="pool-sort" data-sort="name" title="点击排序">名称</th>
+            <th class="pool-sort" data-sort="style" title="点击排序">类型</th>
+            <th class="pool-sort" data-sort="riseDate" title="次日预涨目标交易日；点击排序">预涨日</th>
+            <th class="pool-sort" data-sort="riseRet" title="预涨日收盘后结算；点击排序">预涨结果</th>
+            <th class="pool-sort" data-sort="last" title="点击排序">最新价</th>
+            <th class="pool-sort" data-sort="chg" title="点击排序">涨跌幅</th>
+            <th class="pool-sort" data-sort="qty" title="点击排序">持仓</th>
+            <th class="pool-sort" data-sort="avg" title="点击排序">成本</th>
+            <th class="pool-sort" data-sort="mv" title="点击排序">市值</th>
+            <th class="pool-sort" data-sort="upnl" title="(最新价−成本)/成本×100；点击排序">浮动盈亏/%</th>
+            <th class="pool-sort" data-sort="dayPnl" title="点击排序">今日盈亏</th>
+            <th class="pool-sort" data-sort="cash" title="点击排序">可用资金</th>
             <th title="目标日高低价预测（交易日15:00前=当日，否则下一交易日）；括号内为近史AI/ATR准确率">@forecastCol</th>
             <th>专属策略</th>
             <th>策略状态</th>
@@ -127,7 +127,13 @@
         };
         var riseExpired = i.PredictedRiseDate.HasValue && i.PredictedRiseDate.Value.Date < DateTime.Today;
         <tr data-symbol="@i.Symbol" data-qty="@i.PositionQty" data-avg="@i.AvgCost"
-            data-trade-style="@styleKey">
+            data-trade-style="@styleKey"
+            data-name="@i.Name"
+            data-rise-date="@(i.PredictedRiseDate?.ToString("yyyy-MM-dd") ?? "")"
+            data-rise-ret="@(i.RiseReturnPct?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "")"
+            data-day-pnl="@(i.TodayRealizedPnL?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "")"
+            data-cash="@i.AvailableCash.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+            data-last="" data-chg="" data-mv="" data-upnl="">
             <td>
                 <a asp-action="Stock" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId" class="fw-semibold text-decoration-none">@i.Symbol</a>
             </td>
@@ -462,20 +468,28 @@
                     chgEl.textContent = '-';
                     mvEl.textContent = '-';
                     upnlEl.textContent = '-';
+                    tr.dataset.last = '';
+                    tr.dataset.chg = '';
+                    tr.dataset.mv = '';
+                    tr.dataset.upnl = '';
                     return;
                 }
                 const lastOk = q.lastPrice != null && Number(q.lastPrice) > 0;
                 lastEl.textContent = lastOk ? fmt(q.lastPrice, 2) : '-';
                 setTone(lastEl, lastOk ? q.changePercent : null);
+                tr.dataset.last = lastOk ? String(q.lastPrice) : '';
                 chgEl.textContent = (!lastOk || q.changePercent == null)
                     ? '-'
                     : ((q.changePercent >= 0 ? '+' : '') + Number(q.changePercent).toFixed(2) + '%');
                 setTone(chgEl, lastOk ? q.changePercent : null);
+                tr.dataset.chg = (!lastOk || q.changePercent == null) ? '' : String(q.changePercent);
                 mvEl.textContent = q.marketValue == null ? '-' : fmt(q.marketValue, 0);
                 mvEl.classList.remove('text-muted');
+                tr.dataset.mv = q.marketValue == null ? '' : String(q.marketValue);
                 if (q.unrealizedPnL == null) {
                     upnlEl.textContent = '-';
                     setTone(upnlEl, null);
+                    tr.dataset.upnl = '';
                 } else {
                     const pct = q.unrealizedPnLPct;
                     const pctText = pct == null
@@ -483,21 +497,109 @@
                         : ` (${pct >= 0 ? '+' : ''}${Number(pct).toFixed(2)}%)`;
                     upnlEl.textContent = fmt(q.unrealizedPnL, 2) + pctText;
                     setTone(upnlEl, q.unrealizedPnL);
+                    tr.dataset.upnl = String(q.unrealizedPnL);
                 }
             });
             statusEl.textContent = '行情已更新 ' + new Date().toLocaleTimeString();
             statusEl.classList.remove('text-danger');
             statusEl.classList.add('text-muted');
+            applySort(currentSort.key, currentSort.dir, false);
         } catch (e) {
             statusEl.textContent = '行情加载失败';
             statusEl.classList.add('text-danger');
         }
     }
 
-    refreshQuotes();
-
     const styleFilterKey = `stockPoolStyleFilter:${poolId}`;
+    const sortKeyStorage = `stockPoolSort:${poolId}`;
     const allowedFilters = new Set(['all', 't', 'trend', 'nextday']);
+    const styleRank = { t: 1, trend: 2, nextday: 3 };
+    const currentSort = { key: 'symbol', dir: 'asc' };
+
+    function parseNum(v) {
+        if (v == null || v === '') return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+    }
+
+    function rowSortValue(tr, key) {
+        switch (key) {
+            case 'symbol': return (tr.dataset.symbol || '').toUpperCase();
+            case 'name': return tr.dataset.name || '';
+            case 'style': return styleRank[tr.dataset.tradeStyle] ?? 99;
+            case 'riseDate': return tr.dataset.riseDate || '';
+            case 'riseRet': return parseNum(tr.dataset.riseRet);
+            case 'last': return parseNum(tr.dataset.last);
+            case 'chg': return parseNum(tr.dataset.chg);
+            case 'qty': return parseNum(tr.dataset.qty);
+            case 'avg': return parseNum(tr.dataset.avg);
+            case 'mv': return parseNum(tr.dataset.mv);
+            case 'upnl': return parseNum(tr.dataset.upnl);
+            case 'dayPnl': return parseNum(tr.dataset.dayPnl);
+            case 'cash': return parseNum(tr.dataset.cash);
+            default: return '';
+        }
+    }
+
+    function cmpSort(a, b, key, dir) {
+        const av = rowSortValue(a, key);
+        const bv = rowSortValue(b, key);
+        const aNull = av == null || av === '';
+        const bNull = bv == null || bv === '';
+        if (aNull && bNull) return 0;
+        if (aNull) return 1;
+        if (bNull) return -1;
+        let r;
+        if (typeof av === 'number' && typeof bv === 'number') r = av - bv;
+        else r = String(av).localeCompare(String(bv), 'zh-CN', { numeric: true, sensitivity: 'base' });
+        return dir === 'desc' ? -r : r;
+    }
+
+    function updateSortHeaders(key, dir) {
+        table.querySelectorAll('thead th.pool-sort').forEach(th => {
+            const k = th.getAttribute('data-sort');
+            th.classList.toggle('is-sorted', k === key);
+            th.classList.toggle('sort-asc', k === key && dir === 'asc');
+            th.classList.toggle('sort-desc', k === key && dir === 'desc');
+            th.setAttribute('aria-sort', k === key ? (dir === 'asc' ? 'ascending' : 'descending') : 'none');
+        });
+    }
+
+    function applySort(key, dir, persist) {
+        const k = key || 'symbol';
+        const d = dir === 'desc' ? 'desc' : 'asc';
+        currentSort.key = k;
+        currentSort.dir = d;
+        const tbody = table.tBodies[0];
+        if (!tbody) return;
+        const rows = Array.from(tbody.querySelectorAll('tr[data-symbol]'));
+        rows.sort((a, b) => cmpSort(a, b, k, d));
+        const frag = document.createDocumentFragment();
+        rows.forEach(r => frag.appendChild(r));
+        tbody.appendChild(frag);
+        updateSortHeaders(k, d);
+        if (persist) {
+            try { localStorage.setItem(sortKeyStorage, JSON.stringify({ key: k, dir: d })); } catch { /* ignore */ }
+        }
+    }
+
+    table.querySelectorAll('thead th.pool-sort').forEach(th => {
+        th.addEventListener('click', () => {
+            const key = th.getAttribute('data-sort') || 'symbol';
+            const dir = (currentSort.key === key && currentSort.dir === 'asc') ? 'desc' : 'asc';
+            applySort(key, dir, true);
+        });
+    });
+
+    try {
+        const savedSort = JSON.parse(localStorage.getItem(sortKeyStorage) || 'null');
+        if (savedSort && savedSort.key) {
+            currentSort.key = savedSort.key;
+            currentSort.dir = savedSort.dir === 'desc' ? 'desc' : 'asc';
+        }
+    } catch { /* ignore */ }
+
+    refreshQuotes();
 
     function applyStyleFilter(filter) {
         const f = allowedFilters.has(filter) ? filter : 'all';
@@ -509,6 +611,7 @@
             tr.style.display = (f === 'all' || style === f) ? '' : 'none';
         });
         try { localStorage.setItem(styleFilterKey, f); } catch { /* ignore */ }
+        applySort(currentSort.key, currentSort.dir, false);
     }
 
     document.querySelectorAll('[data-style-filter]').forEach(btn => {

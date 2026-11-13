@@ -64,6 +64,36 @@ body {
   max-width: 14rem;
 }
 
+.stock-pool-table thead th.pool-sort {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.stock-pool-table thead th.pool-sort:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.stock-pool-table thead th.pool-sort.is-sorted {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.stock-pool-table thead th.pool-sort::after {
+  content: " ↕";
+  opacity: 0.45;
+  font-size: 0.75em;
+}
+
+.stock-pool-table thead th.pool-sort.sort-asc::after {
+  content: " ▲";
+  opacity: 1;
+}
+
+.stock-pool-table thead th.pool-sort.sort-desc::after {
+  content: " ▼";
+  opacity: 1;
+}
+
 .stock-pool-table .pool-col-name {
   white-space: nowrap;
   min-width: 4.5rem;
