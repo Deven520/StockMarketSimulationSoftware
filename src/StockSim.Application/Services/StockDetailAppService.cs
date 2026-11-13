@@ -14,17 +14,20 @@ public class StockDetailAppService
     private readonly IStockDetailProvider _detailProvider;
     private readonly CachedLightQuoteService _quotes;
     private readonly DownsideRiskAppService _downsideRisk;
+    private readonly DailyTReviewAppService _dailyTReviews;
 
     public StockDetailAppService(
         IStockSimDataStore db,
         IStockDetailProvider detailProvider,
         CachedLightQuoteService quotes,
-        DownsideRiskAppService downsideRisk)
+        DownsideRiskAppService downsideRisk,
+        DailyTReviewAppService dailyTReviews)
     {
         _db = db;
         _detailProvider = detailProvider;
         _quotes = quotes;
         _downsideRisk = downsideRisk;
+        _dailyTReviews = dailyTReviews;
     }
 
     /// <summary>首屏：仅库内持仓/策略/今日盈亏，行情字段留空由前端异步刷。</summary>
@@ -85,15 +88,16 @@ public class StockDetailAppService
                 StringComparer.OrdinalIgnoreCase);
 
         var lookbackFrom = now.Date.AddDays(-PriceForecastMetrics.EvaluationLookbackDays);
-        var accuracyRows = symbols.Count == 0
+        var evaluatedRows = symbols.Count == 0
             ? new List<PriceRangeForecast>()
             : await _db.PriceRangeForecasts
                 .Where(f => symbols.Contains(f.Symbol)
                             && f.Status == ForecastStatus.Evaluated
-                            && f.CountsTowardAccuracy
                             && f.CombinedAccuracyPct != null
                             && f.ForecastForDate >= lookbackFrom)
                 .ToListAsync(ct);
+        // 榜单仅 CountsTowardAccuracy（ATR/异常样本已排除）
+        var accuracyRows = evaluatedRows.Where(f => f.CountsTowardAccuracy).ToList();
         var aiAvgBySymbol = accuracyRows
             .Where(f => f.Source is ForecastSource.Ai or ForecastSource.CalibratedAi)
             .GroupBy(f => f.Symbol, StringComparer.OrdinalIgnoreCase)
@@ -101,7 +105,8 @@ public class StockDetailAppService
                 g => g.Key,
                 g => Math.Round(g.Average(ScoredCombined), 1),
                 StringComparer.OrdinalIgnoreCase);
-        var atrAvgBySymbol = accuracyRows
+        // ATR 仅作对照展示，不依赖 CountsTowardAccuracy
+        var atrAvgBySymbol = evaluatedRows
             .Where(f => f.Source == ForecastSource.AtrBaseline)
             .GroupBy(f => f.Symbol, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
@@ -430,7 +435,9 @@ public class StockDetailAppService
             : Math.Round(scored.Average(h => h.CombinedAccuracyPct!.Value), 2);
         var aiScored = scored.Where(h =>
             h.Source is nameof(ForecastSource.Ai) or nameof(ForecastSource.CalibratedAi)).ToList();
-        var atrScored = scored.Where(h => h.Source == nameof(ForecastSource.AtrBaseline)).ToList();
+        // ATR 对照分：已对账即可，不进综合榜
+        var atrScored = history.Where(h =>
+            h.Source == nameof(ForecastSource.AtrBaseline) && h.CombinedAccuracyPct.HasValue).ToList();
         decimal? avgAi = aiScored.Count == 0
             ? null
             : Math.Round(aiScored.Average(h => h.CombinedAccuracyPct!.Value), 2);
@@ -450,6 +457,7 @@ public class StockDetailAppService
                 2);
 
         var chartMarks = await LoadChartTradeMarksAsync(symbol, fromDate: null, toDate: null, ct);
+        var dailyReviews = await _dailyTReviews.ListForSymbolAsync(symbol, 15, ct);
 
         return new StockDetailPageDto(
             bundle,
@@ -467,7 +475,8 @@ public class StockDetailAppService
             avgAtr,
             hitRate,
             avgMae,
-            chartMarks);
+            chartMarks,
+            dailyReviews);
     }
 
     private async Task<IReadOnlyList<ChartTradeMarkDto>> LoadChartTradeMarksAsync(

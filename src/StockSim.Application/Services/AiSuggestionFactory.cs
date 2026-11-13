@@ -18,7 +18,7 @@ public static class AiSuggestionFactory
             PayloadJson = item.ValueKind is JsonValueKind.Object or JsonValueKind.Array
                 ? item.GetRawText()
                 : "{}",
-            Symbol = FirstString(item, "symbol", "code"),
+            Symbol = FirstString(item, "symbol", "code") ?? FirstNumberAsString(item, "symbol", "code"),
             Name = FirstString(item, "name", "stockName"),
             Reason = reason,
             SelectionLogic = logic,
@@ -58,6 +58,19 @@ public static class AiSuggestionFactory
                     .ToList();
                 if (parts.Count > 0) return string.Join("；", parts!);
             }
+        }
+
+        return null;
+    }
+
+    private static string? FirstNumberAsString(JsonElement item, params string[] names)
+    {
+        if (item.ValueKind != JsonValueKind.Object) return null;
+        foreach (var name in names)
+        {
+            if (!item.TryGetProperty(name, out var p)) continue;
+            if (p.ValueKind == JsonValueKind.Number)
+                return p.ToString().PadLeft(6, '0');
         }
 
         return null;

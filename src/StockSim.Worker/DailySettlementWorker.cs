@@ -31,12 +31,15 @@ public sealed class DailySettlementWorker : BackgroundService
                     await goals.SettleAllActiveAsync(now.Date, stoppingToken);
                     var pools = scope.ServiceProvider.GetRequiredService<StockPoolAppService>();
                     var riseN = await pools.SettleNextDayRiseAsync(now, stoppingToken);
+                    var pickReviews = scope.ServiceProvider.GetRequiredService<NextDayPickReviewAppService>();
+                    var (pickQueued, _, pickTotal) = await pickReviews.EnqueueSettledForDateAsync(
+                        now.Date, force: false, ct: stoppingToken);
                     var risk = scope.ServiceProvider.GetRequiredService<DownsideRiskAppService>();
                     var riskN = await risk.EvaluatePendingAsync(now, stoppingToken);
                     _lastSettled = now.Date;
                     _logger.LogInformation(
-                        "Daily settlement + goal progress + nextDayRise({RiseN}) + downside risk({RiskN}) done for {Date}",
-                        riseN, riskN, now.Date);
+                        "Daily settlement + goal progress + nextDayRise({RiseN}) + nextDayPickReview(q={PickQ}/n={PickN}) + downside risk({RiskN}) done for {Date}",
+                        riseN, pickQueued, pickTotal, riskN, now.Date);
                 }
                 catch (Exception ex)
                 {

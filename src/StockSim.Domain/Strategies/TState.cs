@@ -30,6 +30,8 @@ public sealed class SymbolRuntimeState
     public decimal? LastBuyPrice { get; set; }
     /// <summary>未平正 T 卖出腿股数；买回后递减，至 0 清空 LastSellPrice。</summary>
     public int OpenTQty { get; set; }
+    /// <summary>当日 ForceFlat 已做过超配减仓；禁止再为平仓而 OpenT 买回/新开 T。</summary>
+    public bool ForceFlatExcessReduced { get; set; }
     public IntradayPathRegime PathRegime { get; set; } = IntradayPathRegime.Unknown;
     public PathPhase PathPhase { get; set; } = PathPhase.Hypothesis;
     public string? PathReason { get; set; }
@@ -46,6 +48,7 @@ public sealed class SymbolRuntimeState
         LastSellPrice = null;
         LastBuyPrice = null;
         OpenTQty = 0;
+        ForceFlatExcessReduced = false;
         PathRegime = IntradayPathRegime.Unknown;
         PathPhase = PathPhase.Hypothesis;
         PathReason = null;

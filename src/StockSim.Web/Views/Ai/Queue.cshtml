@@ -18,6 +18,8 @@
         AiQueueTaskType.StockPick => "选股",
         AiQueueTaskType.StrategyRefresh => "策略刷新",
         AiQueueTaskType.DownsideRiskPredict => "预测风险",
+        AiQueueTaskType.DailyTReview => "每日复盘",
+        AiQueueTaskType.NextDayPickReview => "次日预涨复盘",
         _ => t.ToString()
     };
     string StatusName(AiQueueItemStatus s) => s switch

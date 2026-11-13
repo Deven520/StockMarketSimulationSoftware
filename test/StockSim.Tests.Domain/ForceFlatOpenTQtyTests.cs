@@ -70,6 +70,63 @@ public class ForceFlatOpenTQtyTests
     }
 
     [Fact]
+    public void ForceFlat_Excess_Sell_Does_Not_Count_Toward_OpenT_Nor_BuyBack()
+    {
+        var policy = StrategyParameters.Default();
+        policy.Session.ForceFlatBefore = "14:55";
+        var runtime = new SymbolRuntimeState
+        {
+            Symbol = "300502",
+            TradeDate = DateTime.Today,
+            State = TState.Idle,
+            OpenTQty = 0,
+            LastBuyPrice = 190m
+        };
+        var pos = new Position
+        {
+            Symbol = "300502",
+            BaseQuantity = 600,
+            Quantity = 900,
+            SellableQuantity = 900,
+            AvgCost = 188m
+        };
+        var eff = policy.ToEffective();
+        var now = new DateTime(DateTime.Today.Year, DateTime.Today.Month, DateTime.Today.Day, 14, 56, 0);
+        var ctx = new EvaluateContext
+        {
+            Policy = policy,
+            Effective = eff,
+            Quote = Q(187m),
+            Position = pos,
+            Runtime = runtime,
+            AnchorPrice = 193m,
+            DeviationPct = -3m,
+            Now = now,
+            StrategyDefinitionId = Guid.NewGuid(),
+            CanDoT = true,
+            AvailableCash = 50_000m,
+            ReferencePrice = 205m
+        };
+
+        var eval = new IntradayTStrategyEvaluator();
+        var sig1 = eval.Evaluate(ctx);
+        Assert.Equal(SignalAction.Sell, sig1.Action);
+        Assert.False(sig1.CountsTowardOpenT);
+        Assert.Contains("减仓", sig1.Reason);
+        Assert.True(runtime.ForceFlatExcessReduced);
+
+        // 模拟成交：不计入 OpenT，仓位减少一手
+        pos.Quantity = 800;
+        runtime.OpenTQty = 0;
+        runtime.State = TState.Idle;
+        var sig2 = eval.Evaluate(ctx);
+        // 仍可继续减超配，但绝不能买回
+        Assert.NotEqual(SignalAction.Buy, sig2.Action);
+        if (sig2.Action == SignalAction.Sell)
+            Assert.False(sig2.CountsTowardOpenT);
+    }
+
+    [Fact]
     public void SoftPrefer_Allows_Sell_When_Deviation_Met()
     {
         var policy = StrategyParameters.Default();

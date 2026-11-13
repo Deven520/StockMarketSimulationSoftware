@@ -52,7 +52,11 @@ public enum AiJobType
     /// <summary>工作台策略建议（已废弃，保留枚举兼容历史数据）。</summary>
     StrategyUpdate = 2,
     /// <summary>由投资目标生成选股提示词。</summary>
-    GoalPrompt = 3
+    GoalPrompt = 3,
+    /// <summary>做T股每日收盘复盘。</summary>
+    DailyTReview = 4,
+    /// <summary>次日预涨选股复盘。</summary>
+    NextDayPickReview = 5
 }
 
 public enum InvestmentGoalStatus
@@ -82,7 +86,31 @@ public enum AiQueueTaskType
     StockPick = 2,
     StrategyRefresh = 3,
     /// <summary>池内单股：开市时段预测下一交易日下跌风险。</summary>
-    DownsideRiskPredict = 4
+    DownsideRiskPredict = 4,
+    /// <summary>做T股：收盘后每日复盘（提示词+结果入库，供夜更优化）。</summary>
+    DailyTReview = 5,
+    /// <summary>次日预涨：结算后复盘（供下一批选股注入）。</summary>
+    NextDayPickReview = 6
+}
+
+/// <summary>次日预涨选股复盘状态。</summary>
+public enum NextDayPickReviewStatus
+{
+    Pending = 0,
+    Running = 1,
+    Succeeded = 2,
+    Failed = 3,
+    Skipped = 4
+}
+
+/// <summary>做T每日复盘状态。</summary>
+public enum DailyTReviewStatus
+{
+    Pending = 0,
+    Running = 1,
+    Succeeded = 2,
+    Failed = 3,
+    Skipped = 4
 }
 
 /// <summary>次日下跌风险等级。</summary>

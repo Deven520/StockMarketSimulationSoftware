@@ -498,7 +498,8 @@ public class StrategyEngineService
         if (signal.Action == SignalAction.Sell)
         {
             runtime.LastSellPrice = trade.Price;
-            if (!signal.IsBaseBuild)
+            // ForceFlat 超配减仓不计入 OpenT，避免尾盘卖完立刻买回空转
+            if (!signal.IsBaseBuild && signal.CountsTowardOpenT)
                 runtime.OpenTQty += trade.Quantity;
             if (runtime.LastBuyPrice.HasValue && trade.Price < runtime.LastBuyPrice.Value)
                 runtime.ConsecutiveLosses++;

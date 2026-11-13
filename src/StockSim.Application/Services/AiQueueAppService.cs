@@ -15,6 +15,8 @@ public sealed class AiQueueAppService
     private readonly InvestmentGoalAppService _goals;
     private readonly PerStockStrategyService _perStock;
     private readonly DownsideRiskAppService _downsideRisk;
+    private readonly DailyTReviewAppService _dailyTReview;
+    private readonly NextDayPickReviewAppService _nextDayPickReview;
     private readonly ILogger<AiQueueAppService> _logger;
     private static readonly string WorkerId =
         $"{Environment.MachineName}:{Environment.ProcessId}";
@@ -24,12 +26,16 @@ public sealed class AiQueueAppService
         InvestmentGoalAppService goals,
         PerStockStrategyService perStock,
         DownsideRiskAppService downsideRisk,
+        DailyTReviewAppService dailyTReview,
+        NextDayPickReviewAppService nextDayPickReview,
         ILogger<AiQueueAppService> logger)
     {
         _db = db;
         _goals = goals;
         _perStock = perStock;
         _downsideRisk = downsideRisk;
+        _dailyTReview = dailyTReview;
+        _nextDayPickReview = nextDayPickReview;
         _logger = logger;
     }
 
@@ -199,6 +205,12 @@ public sealed class AiQueueAppService
                 break;
             case AiQueueTaskType.DownsideRiskPredict:
                 await _downsideRisk.ProcessQueuedAsync(item, ct);
+                break;
+            case AiQueueTaskType.DailyTReview:
+                await _dailyTReview.ProcessQueuedAsync(item, ct);
+                break;
+            case AiQueueTaskType.NextDayPickReview:
+                await _nextDayPickReview.ProcessQueuedAsync(item, ct);
                 break;
             default:
                 throw new InvalidOperationException($"未知队列任务类型 {item.TaskType}");

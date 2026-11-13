@@ -79,6 +79,30 @@ public sealed class AdaptiveOverrideService
             sizeAdj *= 0.75m;
         }
 
+        // 预测低显著失效（暴跌日）：买偏离更负、softPrefer 更接近放行，卖侧略抬阈值
+        var softShrink = PriceForecastMetrics.SoftPreferShrinkScale;
+        var lastPx = snap.Last > 0 ? snap.Last : snap.DayLow;
+        if (PriceForecastMetrics.IsForecastLowBroken(policy.Forecast, lastPx))
+        {
+            if (buyAdj < 0) buyAdj *= 1.15m;
+            sellAdj *= 1.05m;
+            softShrink = PriceForecastMetrics.SoftPreferShrinkScaleWhenForecastBroken;
+            sizeAdj *= 0.9m;
+            if (pathLabel is not null && !pathLabel.Contains("ForecastBreak", StringComparison.Ordinal))
+                pathLabel += "+ForecastBreak";
+        }
+
+        // 当日大跌：略降仓位，留现金给第二腿
+        if (snap.PrevClose > 0 && lastPx > 0)
+        {
+            var dayRet = (lastPx - snap.PrevClose) / snap.PrevClose * 100m;
+            if (dayRet <= -5m)
+                sizeAdj *= 0.85m;
+        }
+
+        if (runtime.ForceFlatExcessReduced)
+            blockNewT = true;
+
         var overrides = new RuntimeOverrides
         {
             BuyDeviationPct = buyAdj,
@@ -92,7 +116,7 @@ public sealed class AdaptiveOverrideService
             BreakAvoidSigma = breakSigma,
             PullbackSellPct = pullback,
             BlockNewT = blockNewT,
-            SoftBandShrinkScale = PriceForecastMetrics.SoftPreferShrinkScale,
+            SoftBandShrinkScale = softShrink,
             PathLabel = pathLabel
         };
 

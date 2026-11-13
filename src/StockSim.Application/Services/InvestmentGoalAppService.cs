@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using StockSim.Application.Dtos;
@@ -20,6 +21,8 @@ public class InvestmentGoalAppService
     private readonly CachedLightQuoteService _quotes;
     private readonly IMarketNewsProvider _news;
     private readonly IStockDetailProvider _detailProvider;
+    private readonly NextDayPickReviewAppService _nextDayPickReviews;
+    private readonly NextDayPickFilterAppService _nextDayPickFilter;
     private readonly ILogger<InvestmentGoalAppService> _logger;
 
     public InvestmentGoalAppService(
@@ -29,6 +32,8 @@ public class InvestmentGoalAppService
         CachedLightQuoteService quotes,
         IMarketNewsProvider news,
         IStockDetailProvider detailProvider,
+        NextDayPickReviewAppService nextDayPickReviews,
+        NextDayPickFilterAppService nextDayPickFilter,
         ILogger<InvestmentGoalAppService> logger)
     {
         _db = db;
@@ -37,6 +42,8 @@ public class InvestmentGoalAppService
         _quotes = quotes;
         _news = news;
         _detailProvider = detailProvider;
+        _nextDayPickReviews = nextDayPickReviews;
+        _nextDayPickFilter = nextDayPickFilter;
         _logger = logger;
     }
 
@@ -105,8 +112,19 @@ public class InvestmentGoalAppService
             .OrderBy(p => p.TradeDate)
             .ToListAsync(ct);
         var latest = progress.LastOrDefault();
+        var pickReviews = g.TradeStyle == StockTradeStyle.NextDayRise
+            ? await _nextDayPickReviews.ListForGoalAsync(id, 30, ct)
+            : null;
+        decimal? avgRs = null;
+        if (pickReviews is { Count: > 0 })
+        {
+            var rsRows = pickReviews.Where(r => r.RelativeStrengthPct.HasValue).ToList();
+            if (rsRows.Count > 0)
+                avgRs = Math.Round(rsRows.Average(r => r.RelativeStrengthPct!.Value), 2);
+        }
+
         return new InvestmentGoalDetailDto(
-            MapGoal(g, stocks.Count, latest?.AchievementRate, latest?.PortfolioReturnPct, stocks),
+            MapGoal(g, stocks.Count, latest?.AchievementRate, latest?.PortfolioReturnPct, stocks, avgRs),
             stocks.Select(s =>
             {
                 AiSuggestion? sug = null;
@@ -126,7 +144,8 @@ public class InvestmentGoalAppService
             }).ToList(),
             progress.Select(p => new GoalProgressDailyDto(
                 p.TradeDate, p.PortfolioReturnPct, p.AchievementRate,
-                p.TotalMarketValue, p.TotalBaseline, p.RealizedPnL, p.UnrealizedPnL, p.DayIndex, p.Notes)).ToList());
+                p.TotalMarketValue, p.TotalBaseline, p.RealizedPnL, p.UnrealizedPnL, p.DayIndex, p.Notes)).ToList(),
+            pickReviews);
     }
 
     /// <summary>
@@ -151,9 +170,14 @@ public class InvestmentGoalAppService
         var horizonDays = tradeStyle == StockTradeStyle.NextDayRise ? 1 : request.HorizonDays;
         var nextTradeDay = PriceForecastMetrics.NextTradingDay(DateTime.Today);
 
+        // P0：次日预涨预期收益硬钳制（默认温和隔日涨幅，避免 5%～7% 废掉目标命中口径）
+        var expected = tradeStyle == StockTradeStyle.NextDayRise
+            ? NextDayPickGuard.ClampExpectedReturnPct(request.ExpectedReturnPct)
+            : request.ExpectedReturnPct;
+
         var goal = new InvestmentGoal
         {
-            ExpectedReturnPct = request.ExpectedReturnPct,
+            ExpectedReturnPct = expected,
             HorizonDays = horizonDays,
             ThemePreference = request.ThemePreference.Trim(),
             TradeStyle = tradeStyle,
@@ -163,17 +187,30 @@ public class InvestmentGoalAppService
         await _db.SaveChangesAsync(ct);
 
         var marketContext = await BuildMarketContextAsync(tradeStyle, nextTradeDay, ct);
+        object? recentPickReviews = null;
+        object? pickCalibration = null;
+        if (tradeStyle == StockTradeStyle.NextDayRise)
+        {
+            recentPickReviews = await _nextDayPickReviews.LoadRecentReviewsForPromptAsync(15, ct);
+            pickCalibration = await _nextDayPickFilter.LoadCalibrationForPromptAsync(ct);
+        }
+
         var correlationId = Guid.NewGuid();
         var goalPayload = JsonSerializer.Serialize(new
         {
             expectedReturnPct = goal.ExpectedReturnPct,
+            expectedReturnNote = tradeStyle == StockTradeStyle.NextDayRise
+                ? $"已钳制在 {NextDayPickGuard.MinExpectedReturnPct}～{NextDayPickGuard.MaxExpectedReturnPct}%；主 KPI 为方向命中+相对强弱"
+                : null,
             horizonDays = goal.HorizonDays,
             themePreference = goal.ThemePreference,
             tradeStyle = tradeStyle.ToString(),
             tradeStyleLabel = styleLabel,
             nextTradingDay = nextTradeDay.ToString("yyyy-MM-dd"),
             asOf = DateTime.Now,
-            marketContext
+            marketContext,
+            recentNextDayPickReviews = recentPickReviews,
+            nextDayPickCalibration = pickCalibration
         });
 
         var job = new AiJob
@@ -296,7 +333,9 @@ public class InvestmentGoalAppService
         try
         {
             var output = await _ai.RunStockPickAsync(prompt, job.InputPayload, ct);
+            // 选股阶段不过硬过滤；入库勾选时再过滤。先落库候选，避免解析后半步异常导致整单失败。
             var count = ApplyStockPickOutput(job, output, _db);
+            await _db.SaveChangesAsync(ct);
 
             if (count == 0)
             {
@@ -313,10 +352,10 @@ public class InvestmentGoalAppService
                     retry = true
                 });
                 output = await _ai.RunStockPickAsync(retryPrompt, job.InputPayload, ct);
-                // 清掉可能的空建议后重写
                 var old = await _db.AiSuggestions.Where(s => s.AiJobId == job.Id).ToListAsync(ct);
                 _db.AiSuggestions.RemoveRange(old);
                 count = ApplyStockPickOutput(job, output, _db);
+                await _db.SaveChangesAsync(ct);
             }
 
             queueItem.OutputPayload = output;
@@ -324,11 +363,29 @@ public class InvestmentGoalAppService
             if (count == 0)
             {
                 job.Status = AiJobStatus.Failed;
-                job.ErrorMessage = "选股未返回任何候选股票（items 为空）。请重试或检查 Cursor Agent 输出。";
+                job.ErrorMessage =
+                    "选股未返回任何候选股票（items 为空）。请重试或检查 Cursor Agent 输出。";
                 job.CompletedAt = DateTime.UtcNow;
                 goal.Status = InvestmentGoalStatus.Draft;
                 await _db.SaveChangesAsync(ct);
                 throw new InvalidOperationException(job.ErrorMessage);
+            }
+
+            if (goal.TradeStyle == StockTradeStyle.NextDayRise)
+            {
+                try
+                {
+                    var all = await _db.AiSuggestions.Where(s => s.AiJobId == job.Id).ToListAsync(ct);
+                    var (_, notes) = await _nextDayPickFilter.FilterSuggestionsAsync(
+                        goal, all, strict: false, ct: ct);
+                    if (notes.Count > 0)
+                        job.AnalysisSummary = (job.AnalysisSummary ?? "") +
+                                              $"\n【硬过滤预检，入库时生效】{string.Join("；", notes.Take(6))}";
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "NextDay hard-filter preview failed for job {JobId}", job.Id);
+                }
             }
 
             goal.StockPickJobId = job.Id;
@@ -364,8 +421,28 @@ public class InvestmentGoalAppService
             .ToListAsync(ct);
         if (suggestions.Count == 0) return (false, "未找到选中的建议");
 
+        IReadOnlyList<AiSuggestion> toAccept = suggestions;
+        IReadOnlyList<string> rejectNotes = Array.Empty<string>();
+        if (goal.TradeStyle == StockTradeStyle.NextDayRise)
+        {
+            // 入库用「路径/追高」过滤；confidence 文本已兼容 medium 等，避免误杀
+            var filtered = await _nextDayPickFilter.FilterSuggestionsAsync(
+                goal, suggestions, strict: true, ct: ct);
+            toAccept = filtered.Accepted;
+            rejectNotes = filtered.RejectNotes;
+            if (toAccept.Count == 0)
+            {
+                // 仍允许用户强行入库：回退为原勾选，但提示风险
+                toAccept = suggestions;
+                rejectNotes = rejectNotes.Concat(new[]
+                {
+                    "硬过滤未通过，已按你的勾选强制入库，请自行甄别风险"
+                }).ToList();
+            }
+        }
+
         var added = 0;
-        foreach (var s in suggestions)
+        foreach (var s in toAccept)
         {
             var symbol = s.Symbol;
             var name = s.Name ?? symbol;
@@ -425,7 +502,10 @@ public class InvestmentGoalAppService
         if (goal.TradeStyle == StockTradeStyle.NextDayRise)
             await EvaluateNextDayPicksAsync(goal.Id, DateTime.Now, ct);
 
-        return (true, $"已入选 {added} 只股票并开始跟踪目标达成率");
+        var msg = $"已入选 {added} 只股票并开始跟踪目标达成率";
+        if (rejectNotes.Count > 0)
+            msg += "；硬过滤跳过：" + string.Join("；", rejectNotes.Take(4));
+        return (true, msg);
     }
 
     public async Task SettleAllActiveAsync(DateTime tradeDate, CancellationToken ct = default)
@@ -464,7 +544,7 @@ public class InvestmentGoalAppService
             .ToListAsync(ct);
         if (stocks.Count == 0) return;
 
-        var changed = false;
+        var newlyEvaluated = new List<Guid>();
         foreach (var gs in stocks)
         {
             var target = gs.TargetTradeDate!.Value.Date;
@@ -499,10 +579,24 @@ public class InvestmentGoalAppService
             gs.DirectionHit = dirHit;
             gs.TargetHit = tgtHit;
             gs.EvaluatedAt = localNow;
-            changed = true;
+            newlyEvaluated.Add(gs.Id);
         }
 
-        if (changed) await _db.SaveChangesAsync(ct);
+        if (newlyEvaluated.Count > 0)
+        {
+            await _db.SaveChangesAsync(ct);
+            foreach (var id in newlyEvaluated)
+            {
+                try
+                {
+                    await _nextDayPickReviews.EnqueueFromGoalStockAsync(id, force: false, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Enqueue NextDayPickReview failed for goalStock {Id}", id);
+                }
+            }
+        }
     }
 
     public async Task SettleGoalAsync(Guid goalId, DateTime tradeDate, CancellationToken ct = default)
@@ -606,27 +700,91 @@ public class InvestmentGoalAppService
         job.OutputPayload = output;
         job.Status = AiJobStatus.SucceededPendingReview;
         job.CompletedAt = DateTime.UtcNow;
-        using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(output) ? "{}" : output);
-        var root = doc.RootElement;
-        job.AnalysisSummary = root.TryGetProperty("analysis", out var a) && a.ValueKind == JsonValueKind.String
-            ? a.GetString()
-            : "已生成候选股票，请勾选确认。";
-        if (root.TryGetProperty("steps", out var steps) && steps.ValueKind == JsonValueKind.Array)
-            job.AnalysisStepsJson = steps.GetRawText();
 
-        var count = 0;
-        if (root.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+        if (!TryGetStockPickItems(output, out var analysis, out var stepsJson, out var itemJsons))
         {
-            foreach (var item in items.EnumerateArray())
-            {
-                var sug = AiSuggestionFactory.FromItem(job.Id, item);
-                if (string.IsNullOrWhiteSpace(sug.Symbol)) continue;
-                db.AiSuggestions.Add(sug);
-                count++;
-            }
+            job.AnalysisSummary = "选股输出无法解析为 JSON，请重试。";
+            return 0;
         }
 
+        job.AnalysisSummary = analysis ?? "已生成候选股票，请勾选确认。";
+        job.AnalysisStepsJson = stepsJson;
+
+        var count = 0;
+        foreach (var itemJson in itemJsons)
+        {
+            using var doc = JsonDocument.Parse(itemJson);
+            var sug = AiSuggestionFactory.FromItem(job.Id, doc.RootElement);
+            if (string.IsNullOrWhiteSpace(sug.Symbol)) continue;
+            // Payload 必须在 document 存活时取走
+            sug.PayloadJson = itemJson;
+            db.AiSuggestions.Add(sug);
+            count++;
+        }
+
+        if (count == 0 && itemJsons.Count > 0)
+            job.AnalysisSummary = (job.AnalysisSummary ?? "") +
+                                  $"（items={itemJsons.Count} 但无有效 symbol，请检查输出格式）";
+
         return count;
+    }
+
+    /// <summary>容忍 markdown / 杂质；用 JsonNode 提取 items JSON 字符串列表。</summary>
+    private static bool TryGetStockPickItems(
+        string? output,
+        out string? analysis,
+        out string? stepsJson,
+        out List<string> itemJsons)
+    {
+        analysis = null;
+        stepsJson = null;
+        itemJsons = new List<string>();
+        if (string.IsNullOrWhiteSpace(output)) return false;
+
+        var text = output.Trim();
+        var fence = text.IndexOf("```", StringComparison.Ordinal);
+        if (fence >= 0)
+        {
+            var start = text.IndexOf('{', fence);
+            var end = text.LastIndexOf('}');
+            if (start >= 0 && end > start)
+                text = text[start..(end + 1)];
+        }
+        else
+        {
+            var start = text.IndexOf('{');
+            var end = text.LastIndexOf('}');
+            if (start >= 0 && end > start)
+                text = text[start..(end + 1)];
+        }
+
+        try
+        {
+            var node = JsonNode.Parse(text) as JsonObject;
+            if (node is null) return false;
+
+            analysis = node["analysis"]?.GetValue<string>();
+            if (node["steps"] is JsonArray steps)
+                stepsJson = steps.ToJsonString();
+
+            var itemsNode = node["items"]
+                            ?? node["data"]?["items"]
+                            ?? node["result"]?["items"];
+            if (itemsNode is not JsonArray arr)
+                return true;
+
+            foreach (var el in arr)
+            {
+                if (el is null) continue;
+                itemJsons.Add(el.ToJsonString());
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static (string Prompt, string? Rationale) ParseGoalPromptOutput(string output, InvestmentGoal goal)
@@ -697,7 +855,13 @@ public class InvestmentGoalAppService
             parts.Add(
                 "【选股类型】次日上涨预选：综合当日行情与量能、近史强弱、题材偏好、近期新闻与热点，" +
                 "预选下一交易日更可能上涨的具体 A 股；不做日内高频做T；" +
-                $"目标次日涨幅约 {goal.ExpectedReturnPct}%（相对今日基准价）。");
+                $"隔日温和目标约 {goal.ExpectedReturnPct}%（已钳制≤{NextDayPickGuard.MaxExpectedReturnPct}%）；" +
+                "主 KPI 是方向命中与相对创业板指超额，不是冲涨停。");
+            parts.Add(
+                "【复盘约束】须消化 recentNextDayPickReviews 与 nextDayPickCalibration；" +
+                "避免 ChaseHigh/WeakRelative/ThemeFade/GapDownOpen；同行业建议≤2 只；" +
+                "items 必须含 symbol,name,reason,risk，并尽量含 thesis,catalystType,confidence(0-1),invalidation；" +
+                "即使把握一般也须输出 3～5 只具体代码，禁止只写分析不给 items。");
         }
         else if (goal.TradeStyle == StockTradeStyle.TrendSwing)
         {
@@ -726,9 +890,11 @@ public class InvestmentGoalAppService
         {
             return
                 $"请推荐 3~5 只下一交易日更可能上涨的具体 A 股（必须含 6 位代码与简称）。" +
-                $"题材偏好「{goal.ThemePreference}」；目标次日涨幅约 {goal.ExpectedReturnPct}%；" +
-                "请结合当日走势与量能、近期历史强弱、题材与近期新闻/热点综合判断；排除 ST 与明显利空；" +
-                "每只 reason 须写清次日看多依据；返回 JSON：analysis、items[{symbol,name,reason,risk}]。";
+                $"题材偏好「{goal.ThemePreference}」；隔日温和目标约 {goal.ExpectedReturnPct}%（≤{NextDayPickGuard.MaxExpectedReturnPct}%）；" +
+                "主目标：收涨且相对创业板指不弱；请消化 recentNextDayPickReviews 与 nextDayPickCalibration；" +
+                "排除 ST、明显追高与极弱相对强弱；同行业建议不超过 2 只；" +
+                "必须输出 3～5 只具体代码（禁止空 items）；字段含 symbol,name,reason,risk，并尽量含 thesis,catalystType,confidence,invalidation；" +
+                "返回 JSON：analysis、items[{symbol,name,reason,risk,thesis,catalystType,confidence,invalidation}]。";
         }
 
         if (goal.TradeStyle == StockTradeStyle.TrendSwing)
@@ -758,7 +924,10 @@ public class InvestmentGoalAppService
             return new
             {
                 nextTradingDay = nextTradingDay.ToString("yyyy-MM-dd"),
-                guidance = "请结合下列近期热点新闻、题材偏好与当日/历史强弱，预选下一交易日偏多个股。",
+                guidance =
+                    "请结合热点新闻、题材、强弱，以及 recentNextDayPickReviews / nextDayPickCalibration：" +
+                    "主 KPI=方向命中+相对强弱；预期涨幅已钳制为温和隔日目标；" +
+                    "须消化错因周统计、弱题材列表与 pickHints；勿重复 ChaseHigh/WeakRelative/ThemeFade/GapDownOpen。",
                 hotNews = news.Select(n => new
                 {
                     title = n.Title,
@@ -774,7 +943,8 @@ public class InvestmentGoalAppService
             return new
             {
                 nextTradingDay = nextTradingDay.ToString("yyyy-MM-dd"),
-                guidance = "新闻源暂不可用；请仍结合题材与公开市场常识预选次日偏多个股。"
+                guidance =
+                    "新闻源暂不可用；请仍结合题材、公开市场常识与 recentNextDayPickReviews 失败模式预选次日偏多个股。"
             };
         }
     }
@@ -795,7 +965,8 @@ public class InvestmentGoalAppService
         int stockCount,
         decimal? achievement,
         decimal? portfolioReturn,
-        IReadOnlyList<InvestmentGoalStock>? stocks = null)
+        IReadOnlyList<InvestmentGoalStock>? stocks = null,
+        decimal? avgRelativeStrengthPct = null)
     {
         decimal? dirRate = null;
         decimal? tgtRate = null;
@@ -806,6 +977,7 @@ public class InvestmentGoalAppService
             if (scored.Count > 0)
             {
                 dirRate = Math.Round(100m * scored.Count(s => s.DirectionHit == true) / scored.Count, 1);
+                // 目标命中为弹性指标；方向命中 + 相对强弱才是主 KPI
                 tgtRate = Math.Round(100m * scored.Count(s => s.TargetHit == true) / scored.Count, 1);
                 avgRet = Math.Round(scored.Average(s => s.NextDayReturnPct!.Value), 2);
             }
@@ -814,6 +986,6 @@ public class InvestmentGoalAppService
         return new(
             g.Id, g.ExpectedReturnPct, g.HorizonDays, g.ThemePreference, g.GeneratedPrompt, g.PromptRationale,
             g.Status, g.StartDate, g.TargetEndDate, g.StockPickJobId, stockCount, achievement, portfolioReturn,
-            g.CreationTime, g.TradeStyle, dirRate, tgtRate, avgRet);
+            g.CreationTime, g.TradeStyle, dirRate, tgtRate, avgRet, avgRelativeStrengthPct);
     }
 }

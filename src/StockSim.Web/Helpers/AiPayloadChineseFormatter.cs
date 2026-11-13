@@ -202,6 +202,8 @@ public static class AiPayloadChineseFormatter
         ["StrategyUpdate"] = "策略更新",
         ["GoalToPrompt"] = "目标→提示词",
         ["StrategyRefresh"] = "策略刷新",
+        ["DailyTReview"] = "每日复盘",
+        ["DownsideRiskPredict"] = "下跌风险预测",
         ["AShareDefault"] = "A股默认费用"
     };
 

@@ -151,7 +151,55 @@ public record StockDetailPageDto(
     decimal? AvgAtrAccuracyPct = null,
     decimal? HitRatePct = null,
     decimal? AvgMeanAbsDeviationPct = null,
-    IReadOnlyList<ChartTradeMarkDto>? ChartTradeMarks = null);
+    IReadOnlyList<ChartTradeMarkDto>? ChartTradeMarks = null,
+    IReadOnlyList<DailyTReviewDto>? DailyTReviews = null);
+
+/// <summary>做T股每日收盘复盘。</summary>
+public record DailyTReviewDto(
+    Guid Id,
+    string Symbol,
+    string Name,
+    DateTime TradeDate,
+    string Status,
+    string? Grade,
+    string? Summary,
+    string? PathRegime,
+    string? PathPhase,
+    decimal? CyclePnlApprox,
+    decimal? Fees,
+    int TradeCount,
+    string? FindingsJson,
+    string? StrategyHintsJson,
+    string? Prompt,
+    string? OutputPayload,
+    DateTime? CompletedAt,
+    string? Notes,
+    string? ErrorMessage);
+
+/// <summary>次日预涨选股复盘。</summary>
+public record NextDayPickReviewDto(
+    Guid Id,
+    Guid? InvestmentGoalId,
+    string Symbol,
+    string Name,
+    DateTime TargetTradeDate,
+    string Status,
+    string? Grade,
+    string? Summary,
+    decimal? ReturnPct,
+    bool? DirectionHit,
+    bool? TargetHit,
+    decimal? RelativeStrengthPct,
+    string? ThemePreference,
+    decimal? ExpectedReturnPct,
+    string? FailureTagsJson,
+    string? FindingsJson,
+    string? PickHintsJson,
+    string? Prompt,
+    string? OutputPayload,
+    DateTime? CompletedAt,
+    string? Notes,
+    string? ErrorMessage);
 
 /// <summary>行情图成交点：手工买=B / 手工卖=S / 策略做T=T。</summary>
 public record ChartTradeMarkDto(
@@ -370,7 +418,9 @@ public record InvestmentGoalDto(
     StockTradeStyle TradeStyle = StockTradeStyle.IntradayT,
     decimal? DirectionHitRatePct = null,
     decimal? TargetHitRatePct = null,
-    decimal? AvgNextDayReturnPct = null);
+    decimal? AvgNextDayReturnPct = null,
+    /// <summary>平均相对强弱%（个股收益−指数），次日预涨主 KPI 之一。</summary>
+    decimal? AvgRelativeStrengthPct = null);
 
 public record InvestmentGoalStockDto(
     Guid Id,
@@ -403,4 +453,5 @@ public record GoalProgressDailyDto(
 public record InvestmentGoalDetailDto(
     InvestmentGoalDto Goal,
     IReadOnlyList<InvestmentGoalStockDto> Stocks,
-    IReadOnlyList<GoalProgressDailyDto> Progress);
+    IReadOnlyList<GoalProgressDailyDto> Progress,
+    IReadOnlyList<NextDayPickReviewDto>? NextDayPickReviews = null);

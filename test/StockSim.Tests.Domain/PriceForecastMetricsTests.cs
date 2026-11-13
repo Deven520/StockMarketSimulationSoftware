@@ -1,3 +1,4 @@
+using StockSim.Domain.Enums;
 using StockSim.Domain.MarketData;
 using StockSim.Domain.Strategies;
 
@@ -154,7 +155,9 @@ public class PriceForecastMetricsTests
         Assert.NotNull(fc);
         Assert.True(fc!.PredictedHigh > fc.PredictedLow);
         Assert.Equal("atr_baseline", fc.Source);
-        Assert.True(fc.CountsTowardAccuracy);
+        Assert.False(fc.CountsTowardAccuracy);
+        Assert.False(PriceForecastMetrics.ShouldCountTowardAccuracy(ForecastSource.AtrBaseline));
+        Assert.False(PriceForecastMetrics.IsPlaceholderForecast(fc));
     }
 
     [Fact]
@@ -167,11 +170,63 @@ public class PriceForecastMetricsTests
             PredictedLow = 100m,
             Source = "ai"
         };
-        // 历史系统性偏高 10%
+        // 历史系统性偏高 10% → 校准偏差钳制在 ±5%
         var calibrated = PriceForecastMetrics.ApplyBiasCalibration(raw, 10m, 10m);
         Assert.Equal("calibrated_ai", calibrated.Source);
         Assert.True(calibrated.PredictedHigh < 110m);
         Assert.True(calibrated.PredictedLow < 100m);
+        // 10% 输入钳到 5%：110/1.05 ≈ 104.76
+        Assert.Equal(104.76m, calibrated.PredictedHigh);
+        Assert.False(PriceForecastMetrics.ShouldApplyCalibration(3, 2m, 2m));
+        Assert.True(PriceForecastMetrics.ShouldApplyCalibration(5, 2m, 2m));
+    }
+
+    [Fact]
+    public void ClampForecastToTradingBand_Caps_Limit_And_Atr_Width()
+    {
+        var raw = new ForecastPolicy
+        {
+            PredictedHigh = 140m,
+            PredictedLow = 90m,
+            Source = "ai",
+            CountsTowardAccuracy = true
+        };
+        var clamped = PriceForecastMetrics.ClampForecastToTradingBand(raw, 100m, atr: 5m, limitCapPct: 12m);
+        Assert.True(clamped.PredictedHigh <= 112m);
+        Assert.True(clamped.PredictedLow >= 88m);
+        Assert.True(clamped.PredictedHigh - clamped.PredictedLow <= 5m * PriceForecastMetrics.MaxAtrBandMultiple + 0.01m);
+    }
+
+    [Fact]
+    public void BlendAiWithAtr_Weights_Toward_Atr_When_Accuracy_Low()
+    {
+        var ai = new ForecastPolicy
+        {
+            PredictedHigh = 120m,
+            PredictedLow = 110m,
+            Source = "ai",
+            CountsTowardAccuracy = true
+        };
+        var atr = new ForecastPolicy
+        {
+            PredictedHigh = 105m,
+            PredictedLow = 95m,
+            Source = "atr_baseline",
+            CountsTowardAccuracy = false
+        };
+        var w = PriceForecastMetrics.ResolveAiBlendWeight(20m);
+        Assert.Equal(0.35m, w);
+        var blended = PriceForecastMetrics.BlendAiWithAtr(ai, atr, w);
+        Assert.True(blended.PredictedHigh < 120m);
+        Assert.True(blended.PredictedHigh > 105m);
+        Assert.True(blended.CountsTowardAccuracy);
+    }
+
+    [Fact]
+    public void IsOutlierEvaluation_Flags_Large_Deviation()
+    {
+        Assert.True(PriceForecastMetrics.IsOutlierEvaluation(-35m, 1m));
+        Assert.False(PriceForecastMetrics.IsOutlierEvaluation(-10m, 8m));
     }
 
     [Fact]
@@ -226,5 +281,24 @@ public class PriceForecastMetricsTests
         Assert.Equal(1m, PriceForecastMetrics.ResolveAggressionScale(80m));
         Assert.True(PriceForecastMetrics.ResolveAggressionScale(0m) < 1m);
         Assert.Equal(1m, PriceForecastMetrics.ResolveAggressionScale(null));
+    }
+
+    [Fact]
+    public void ForecastLowBroken_Passes_Buy_SoftBand()
+    {
+        var fc = new ForecastPolicy
+        {
+            ForDate = "2026-11-13",
+            PredictedHigh = 224m,
+            PredictedLow = 204m,
+            SoftBandMode = "softPrefer",
+            Source = "ai",
+            CountsTowardAccuracy = true
+        };
+        Assert.True(PriceForecastMetrics.IsForecastLowBroken(fc, 186m));
+        var v = PriceForecastMetrics.EvaluateForecastSoftBand(
+            fc, 186m, new DateTime(2026, 11, 13, 14, 0, 0), forSell: false, 0.35m, out var msg);
+        Assert.Equal(SoftBandVerdict.Pass, v);
+        Assert.Contains("失效", msg);
     }
 }

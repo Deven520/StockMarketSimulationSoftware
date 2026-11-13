@@ -30,6 +30,8 @@ public class StockSimDbContext : DbContext, IStockSimDataStore
     public DbSet<GoalProgressDaily> GoalProgressDailies => Set<GoalProgressDaily>();
     public DbSet<PriceRangeForecast> PriceRangeForecasts => Set<PriceRangeForecast>();
     public DbSet<DownsideRiskForecast> DownsideRiskForecasts => Set<DownsideRiskForecast>();
+    public DbSet<DailyTReview> DailyTReviews => Set<DailyTReview>();
+    public DbSet<NextDayPickReview> NextDayPickReviews => Set<NextDayPickReview>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -254,6 +256,40 @@ public class StockSimDbContext : DbContext, IStockSimDataStore
             e.HasIndex(x => new { x.StockPoolItemId, x.PredictedForDate });
             e.HasIndex(x => x.AiQueueItemId);
             e.HasIndex(x => new { x.Status, x.PredictedForDate });
+        });
+
+        modelBuilder.Entity<DailyTReview>(e =>
+        {
+            e.ToTable("AppDailyTReviews");
+            e.Property(x => x.Symbol).HasMaxLength(16).IsRequired();
+            e.Property(x => x.Name).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Grade).HasMaxLength(16);
+            e.Property(x => x.PathRegime).HasMaxLength(32);
+            e.Property(x => x.PathPhase).HasMaxLength(32);
+            e.Property(x => x.CyclePnlApprox).HasPrecision(18, 4);
+            e.Property(x => x.Fees).HasPrecision(18, 4);
+            e.HasIndex(x => new { x.Symbol, x.TradeDate }).IsUnique();
+            e.HasIndex(x => x.AiQueueItemId);
+            e.HasIndex(x => new { x.Status, x.TradeDate });
+            e.HasIndex(x => x.StockPoolItemId);
+        });
+
+        modelBuilder.Entity<NextDayPickReview>(e =>
+        {
+            e.ToTable("AppNextDayPickReviews");
+            e.Property(x => x.Symbol).HasMaxLength(16).IsRequired();
+            e.Property(x => x.Name).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Grade).HasMaxLength(16);
+            e.Property(x => x.ThemePreference).HasMaxLength(128);
+            e.Property(x => x.ReturnPct).HasPrecision(18, 4);
+            e.Property(x => x.RelativeStrengthPct).HasPrecision(18, 4);
+            e.Property(x => x.BaselinePrice).HasPrecision(18, 4);
+            e.Property(x => x.ActualClose).HasPrecision(18, 4);
+            e.Property(x => x.ExpectedReturnPct).HasPrecision(18, 4);
+            e.HasIndex(x => new { x.Symbol, x.TargetTradeDate }).IsUnique();
+            e.HasIndex(x => x.AiQueueItemId);
+            e.HasIndex(x => new { x.Status, x.TargetTradeDate });
+            e.HasIndex(x => x.InvestmentGoalId);
         });
     }
 }

@@ -22,6 +22,8 @@ public static class DbInitializer
         await EnsureInvestmentGoalTablesAsync(db, logger);
         await EnsurePriceRangeForecastTableAsync(db, logger);
         await EnsureDownsideRiskForecastTableAsync(db, logger);
+        await EnsureDailyTReviewTableAsync(db, logger);
+        await EnsureNextDayPickReviewTableAsync(db, logger);
         await EnsureAiQueueTableAsync(db, logger);
 
         if (await db.Accounts.AnyAsync())
@@ -408,6 +410,122 @@ public static class DbInitializer
         catch (Exception ex)
         {
             logger.LogWarning(ex, "EnsureDownsideRiskForecastTable skipped or partial");
+        }
+    }
+
+    private static async Task EnsureNextDayPickReviewTableAsync(StockSimDbContext db, ILogger logger)
+    {
+        try
+        {
+            var provider = db.Database.ProviderName ?? string.Empty;
+            if (!provider.Contains("Sqlite", StringComparison.OrdinalIgnoreCase)) return;
+
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS AppNextDayPickReviews (
+                    Id TEXT NOT NULL PRIMARY KEY,
+                    CreationTime TEXT NOT NULL,
+                    InvestmentGoalId TEXT NULL,
+                    GoalStockId TEXT NULL,
+                    StockPoolItemId TEXT NULL,
+                    Symbol TEXT NOT NULL,
+                    Name TEXT NOT NULL,
+                    TargetTradeDate TEXT NOT NULL,
+                    Status INTEGER NOT NULL DEFAULT 0,
+                    BaselinePrice TEXT NULL,
+                    ActualClose TEXT NULL,
+                    ReturnPct TEXT NULL,
+                    DirectionHit INTEGER NULL,
+                    TargetHit INTEGER NULL,
+                    RelativeStrengthPct TEXT NULL,
+                    ThemePreference TEXT NULL,
+                    ExpectedReturnPct TEXT NULL,
+                    FailureTagsJson TEXT NULL,
+                    Prompt TEXT NULL,
+                    InputPayload TEXT NULL,
+                    OutputPayload TEXT NULL,
+                    Summary TEXT NULL,
+                    FindingsJson TEXT NULL,
+                    PickHintsJson TEXT NULL,
+                    Grade TEXT NULL,
+                    AiJobId TEXT NULL,
+                    AiQueueItemId TEXT NULL,
+                    CompletedAt TEXT NULL,
+                    ErrorMessage TEXT NULL,
+                    Notes TEXT NULL
+                );
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE UNIQUE INDEX IF NOT EXISTS IX_AppNextDayPickReviews_Symbol_TargetTradeDate
+                ON AppNextDayPickReviews (Symbol, TargetTradeDate);
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE INDEX IF NOT EXISTS IX_AppNextDayPickReviews_Status_TargetTradeDate
+                ON AppNextDayPickReviews (Status, TargetTradeDate);
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE INDEX IF NOT EXISTS IX_AppNextDayPickReviews_InvestmentGoalId
+                ON AppNextDayPickReviews (InvestmentGoalId);
+                """);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "EnsureNextDayPickReviewTable skipped or partial");
+        }
+    }
+
+    private static async Task EnsureDailyTReviewTableAsync(StockSimDbContext db, ILogger logger)
+    {
+        try
+        {
+            var provider = db.Database.ProviderName ?? string.Empty;
+            if (!provider.Contains("Sqlite", StringComparison.OrdinalIgnoreCase)) return;
+
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE TABLE IF NOT EXISTS AppDailyTReviews (
+                    Id TEXT NOT NULL PRIMARY KEY,
+                    CreationTime TEXT NOT NULL,
+                    StockPoolItemId TEXT NULL,
+                    Symbol TEXT NOT NULL,
+                    Name TEXT NOT NULL,
+                    TradeDate TEXT NOT NULL,
+                    Status INTEGER NOT NULL DEFAULT 0,
+                    Prompt TEXT NULL,
+                    InputPayload TEXT NULL,
+                    OutputPayload TEXT NULL,
+                    Summary TEXT NULL,
+                    FindingsJson TEXT NULL,
+                    StrategyHintsJson TEXT NULL,
+                    Grade TEXT NULL,
+                    CyclePnlApprox TEXT NULL,
+                    Fees TEXT NULL,
+                    TradeCount INTEGER NOT NULL DEFAULT 0,
+                    PathRegime TEXT NULL,
+                    PathPhase TEXT NULL,
+                    StrategyDefinitionId TEXT NULL,
+                    StrategyVersionId TEXT NULL,
+                    AiJobId TEXT NULL,
+                    AiQueueItemId TEXT NULL,
+                    CompletedAt TEXT NULL,
+                    ErrorMessage TEXT NULL,
+                    Notes TEXT NULL
+                );
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE UNIQUE INDEX IF NOT EXISTS IX_AppDailyTReviews_Symbol_TradeDate
+                ON AppDailyTReviews (Symbol, TradeDate);
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE INDEX IF NOT EXISTS IX_AppDailyTReviews_Status_TradeDate
+                ON AppDailyTReviews (Status, TradeDate);
+                """);
+            await db.Database.ExecuteSqlRawAsync("""
+                CREATE INDEX IF NOT EXISTS IX_AppDailyTReviews_AiQueueItemId
+                ON AppDailyTReviews (AiQueueItemId);
+                """);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "EnsureDailyTReviewTable skipped or partial");
         }
     }
 

@@ -69,6 +69,25 @@
                     title="等同 Worker 夜更；Worker 未在 22:00 运行时可在此补跑">全池AI刷新</button>
         </form>
     </div>
+    <div class="col-auto">
+        <form asp-action="EnqueueDailyTReviewAll" method="post" class="d-inline"
+              onsubmit="return confirm('将对池内全部做T股入队每日复盘（与约 15:30 Worker 相同），确认？');">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="poolId" value="@poolId" />
+            <input type="hidden" name="tradeDate" value="@DateTime.Today.ToString("yyyy-MM-dd")" />
+            <button type="submit" class="btn btn-outline-warning"
+                    title="仅做T股；无成交可跳过；结果供夜更优化。等同 DailyTReviewWorker">全池每日复盘</button>
+        </form>
+    </div>
+    <div class="col-auto">
+        <form asp-action="EnqueueNextDayPickReviewAll" method="post" class="d-inline"
+              onsubmit="return confirm('将对近两周已结算的次日预涨标的入队选股复盘，确认？');">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="poolId" value="@poolId" />
+            <button type="submit" class="btn btn-outline-info"
+                    title="扫近两周已结算次日预涨 → AI 错因/hints；勿仅限今日">次日预涨复盘</button>
+        </form>
+    </div>
 </div>
 
 <div class="pool-table-shell">

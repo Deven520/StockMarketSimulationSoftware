@@ -44,7 +44,7 @@ public class PriceRangeForecast : EntityBase
     /// <summary>预测来源（AI / ATR 基线 / 占位等）。</summary>
     public ForecastSource Source { get; set; } = ForecastSource.Ai;
 
-    /// <summary>是否计入准确率榜与平均值（占位预测为 false）。</summary>
+    /// <summary>是否计入准确率榜与平均值（占位 / ATR 对照 / 异常样本为 false）。</summary>
     public bool CountsTowardAccuracy { get; set; } = true;
 
     public Guid? StrategyDefinitionId { get; set; }

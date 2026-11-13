@@ -59,6 +59,15 @@
                     <input type="hidden" name="returnTo" value="stock" />
                     <button class="btn btn-sm btn-warning" type="submit" title="立即 AI 刷新策略并生成次日高低预测">AI刷新预测</button>
                 </form>
+                <form asp-action="EnqueueDailyTReview" method="post" class="d-inline">
+                    @Html.AntiForgeryToken()
+                    <input type="hidden" name="poolId" value="@Model.PoolId" />
+                    <input type="hidden" name="itemId" value="@Model.PoolItemId" />
+                    <input type="hidden" name="symbol" value="@b.Symbol" />
+                    <input type="hidden" name="tradeDate" value="@DateTime.Today.ToString("yyyy-MM-dd")" />
+                    <input type="hidden" name="force" value="true" />
+                    <button class="btn btn-sm btn-outline-warning" type="submit" title="入队做T每日复盘（可重跑）">AI每日复盘</button>
+                </form>
             }
             @if (Model.PoolId.HasValue)
             {
@@ -132,12 +141,63 @@
         </div>
     </div>
 
+    <div class="ths-panel mt-2" id="daily-t-review">
+        <div class="ths-panel-hd">做T每日复盘</div>
+        @if (Model.DailyTReviews is not { Count: > 0 })
+        {
+            <div class="p-3 small text-muted">
+                暂无复盘。交易日约 15:30 自动入队（仅做T股）；也可点上方「AI每日复盘」。结论供夜更 22:00 优化策略。
+            </div>
+        }
+        else
+        {
+            <div class="table-responsive" style="max-height:360px;overflow:auto;">
+                <table class="table table-sm table-dark table-striped mb-0">
+                    <thead>
+                    <tr>
+                        <th>日期</th>
+                        <th>状态</th>
+                        <th>等级</th>
+                        <th>路径</th>
+                        <th title="买卖配对价差估算（未含费）">T价差≈</th>
+                        <th>费用</th>
+                        <th>笔数</th>
+                        <th style="min-width:220px;">摘要</th>
+                        <th style="min-width:200px;">策略建议</th>
+                        <th style="min-width:180px;">提示词</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    @foreach (var row in Model.DailyTReviews!)
+                    {
+                        <tr>
+                            <td>@row.TradeDate.ToString("yyyy-MM-dd")</td>
+                            <td>@row.Status</td>
+                            <td>@(row.Grade ?? "-")</td>
+                            <td>@(string.IsNullOrWhiteSpace(row.PathRegime) ? "-" : $"{row.PathRegime}/{row.PathPhase}")</td>
+                            <td>@(row.CyclePnlApprox?.ToString("N2") ?? "-")</td>
+                            <td>@(row.Fees?.ToString("N2") ?? "-")</td>
+                            <td>@row.TradeCount</td>
+                            <td class="small" style="white-space:pre-wrap;word-break:break-word;" title="@(row.Summary ?? row.Notes ?? "")">@(row.Summary ?? row.Notes ?? row.ErrorMessage ?? "-")</td>
+                            <td class="small" style="white-space:pre-wrap;word-break:break-word;max-width:280px;" title="@(row.StrategyHintsJson ?? "")">@(string.IsNullOrWhiteSpace(row.StrategyHintsJson) ? "-" : row.StrategyHintsJson)</td>
+                            <td class="small" style="white-space:pre-wrap;word-break:break-word;max-width:240px;" title="@(row.Prompt ?? "")">@(string.IsNullOrWhiteSpace(row.Prompt) ? "-" : (row.Prompt!.Length > 160 ? row.Prompt[..160] + "…" : row.Prompt))</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+            <div class="small text-muted p-2">
+                复盘评估做T质量时以配对价差为准；账面日盈亏按持仓成本口径。夜更会读取近几日 strategyHints。
+            </div>
+        }
+    </div>
+
     <div class="ths-panel mt-2" id="forecast-history">
         <div class="ths-panel-hd">高低价预测准确率历史</div>
         @if (Model.ForecastHistory is not { Count: > 0 })
         {
             <div class="p-3 small text-muted">
-                暂无预测记录。请点击上方「AI刷新预测」，或等待每晚约 22:00 夜更。规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。占位预测不计入准确率；系统同时写入 ATR 基线对照。
+                暂无预测记录。请点击上方「AI刷新预测」，或等待每晚约 22:00 夜更。规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。占位与 ATR 基线不计入准确率榜（ATR 仅对照）；异常大偏差样本亦不计入。
             </div>
         }
         else

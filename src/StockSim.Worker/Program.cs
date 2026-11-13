@@ -69,6 +69,7 @@ builder.Services.AddHttpClient<IStockSuggestProvider, EastMoneyStockSuggestProvi
 });
 builder.Services.AddHostedService<StrategyWorker>();
 builder.Services.AddHostedService<DailySettlementWorker>();
+builder.Services.AddHostedService<DailyTReviewWorker>();
 builder.Services.AddHostedService<NightlyStrategyRefreshWorker>();
 
 var host = builder.Build();

@@ -31,4 +31,28 @@ public class NextDayPickMetricsTests
         Assert.False(dir);
         Assert.False(tgt);
     }
+
+    [Fact]
+    public void RelativeStrength_And_FailureTags()
+    {
+        Assert.Equal(-2.5m, NextDayPickMetrics.RelativeStrengthPct(-1m, 1.5m));
+        Assert.Empty(NextDayPickMetrics.InferFailureTags(true, 2m, 1m));
+
+        var tags = NextDayPickMetrics.InferFailureTags(
+            directionHit: false,
+            returnPct: -3m,
+            relativeStrengthPct: -2m,
+            openGapPct: -3m,
+            nearHighChase: true);
+        Assert.Contains(NextDayPickMetrics.TagWeakRelative, tags);
+        Assert.Contains(NextDayPickMetrics.TagGapDownOpen, tags);
+        Assert.Contains(NextDayPickMetrics.TagChaseHigh, tags);
+    }
+
+    [Fact]
+    public void InferFailureTags_MarketDrag_When_StockDown_But_Beats_Index()
+    {
+        var tags = NextDayPickMetrics.InferFailureTags(false, -1m, relativeStrengthPct: 0.5m);
+        Assert.Contains(NextDayPickMetrics.TagMarketDrag, tags);
+    }
 }

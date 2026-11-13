@@ -472,4 +472,9 @@ public sealed class TradeSignal
     public Guid? StockPoolId { get; init; }
     /// <summary>是否为首日/补建底仓买入（成交后应写入 BaseQuantity）。</summary>
     public bool IsBaseBuild { get; init; }
+    /// <summary>
+    /// 卖出是否计入正 T 的 OpenTQty（默认 true）。
+    /// ForceFlat 超配减仓应为 false，避免尾盘卖出后立刻被买回空转。
+    /// </summary>
+    public bool CountsTowardOpenT { get; init; } = true;
 }

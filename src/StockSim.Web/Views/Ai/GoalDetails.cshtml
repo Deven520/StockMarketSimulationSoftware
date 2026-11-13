@@ -12,6 +12,15 @@
             <input type="hidden" name="id" value="@g.Id" />
             <button class="btn btn-outline-primary btn-sm">刷新今日达成率</button>
         </form>
+        @if (g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
+        {
+            <form asp-action="EnqueueNextDayPickReviews" method="post" class="d-inline"
+                  onsubmit="return confirm('为已对账入选股入队次日预涨复盘？');">
+                @Html.AntiForgeryToken()
+                <input type="hidden" name="goalId" value="@g.Id" />
+                <button class="btn btn-outline-info btn-sm" title="对账后 AI 错因分析，供下一批选股注入">入队选股复盘</button>
+            </form>
+        }
         <a class="btn btn-outline-secondary btn-sm" asp-action="Goals">返回列表</a>
         @if (g.StockPickJobId.HasValue)
         {
@@ -47,22 +56,30 @@
     </div>
     @if (g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
     {
-        <div class="col-md-4">
+        <div class="col-md-3">
             <div class="border rounded p-3">
-                <div class="text-muted small">次日方向命中率</div>
+                <div class="text-muted small">方向命中率（主KPI）</div>
                 <div class="fs-4">@(g.DirectionHitRatePct?.ToString("N1") ?? "-")%</div>
             </div>
         </div>
-        <div class="col-md-4">
+        <div class="col-md-3">
             <div class="border rounded p-3">
-                <div class="text-muted small">次日目标命中率</div>
-                <div class="fs-4">@(g.TargetHitRatePct?.ToString("N1") ?? "-")%</div>
+                <div class="text-muted small">平均相对强弱%</div>
+                <div class="fs-4">@(g.AvgRelativeStrengthPct?.ToString("N2") ?? "-")</div>
+                <div class="text-muted small">个股−创业板指</div>
             </div>
         </div>
-        <div class="col-md-4">
+        <div class="col-md-3">
             <div class="border rounded p-3">
-                <div class="text-muted small">等权次日收益</div>
-                <div class="fs-4">@(g.AvgNextDayReturnPct?.ToString("N2") ?? "-")%</div>
+                <div class="text-muted small">等权次日收益%</div>
+                <div class="fs-4">@(g.AvgNextDayReturnPct?.ToString("N2") ?? "-")</div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="border rounded p-3">
+                <div class="text-muted small">弹性目标命中率</div>
+                <div class="fs-4">@(g.TargetHitRatePct?.ToString("N1") ?? "-")%</div>
+                <div class="text-muted small">预期 @g.ExpectedReturnPct%（≤3% 钳制）</div>
             </div>
         </div>
     }
@@ -125,6 +142,55 @@
     }
     </tbody>
 </table>
+
+@if (g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
+{
+    <h5>次日预涨复盘</h5>
+    @if (Model.NextDayPickReviews is not { Count: > 0 })
+    {
+        <p class="text-muted small">暂无复盘。对账完成后可点「入队选股复盘」，或等日终结算自动入队。</p>
+    }
+    else
+    {
+        <div class="table-responsive mb-4">
+            <table class="table table-sm table-hover">
+                <thead>
+                <tr>
+                    <th>目标日</th>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>评级</th>
+                    <th>收益%</th>
+                    <th>方向</th>
+                    <th>相对强弱</th>
+                    <th>错因</th>
+                    <th>摘要</th>
+                    <th>状态</th>
+                </tr>
+                </thead>
+                <tbody>
+                @foreach (var r in Model.NextDayPickReviews!)
+                {
+                    <tr>
+                        <td>@r.TargetTradeDate.ToString("yyyy-MM-dd")</td>
+                        <td>@r.Symbol</td>
+                        <td>@r.Name</td>
+                        <td>@(r.Grade ?? "-")</td>
+                        <td class="@(r.ReturnPct is null ? "" : (r.ReturnPct >= 0 ? "text-danger" : "text-success"))">
+                            @(r.ReturnPct?.ToString("N2") ?? "-")
+                        </td>
+                        <td>@(r.DirectionHit is null ? "-" : (r.DirectionHit.Value ? "命中" : "未中"))</td>
+                        <td>@(r.RelativeStrengthPct?.ToString("N2") ?? "-")</td>
+                        <td class="small">@(r.FailureTagsJson ?? "—")</td>
+                        <td class="small" style="white-space:pre-wrap;max-width:22rem;">@(r.Summary ?? "—")</td>
+                        <td>@r.Status</td>
+                    </tr>
+                }
+                </tbody>
+            </table>
+        </div>
+    }
+}
 
 <h5>每日达成率</h5>
 <table class="table table-sm table-hover">
