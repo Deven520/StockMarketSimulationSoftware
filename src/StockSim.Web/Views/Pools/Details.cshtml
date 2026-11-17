@@ -94,19 +94,19 @@
 <table class="table table-sm table-hover align-middle stock-pool-table" id="poolTable" data-pool-id="@poolId">
     <thead class="table-dark">
         <tr>
-            <th class="pool-sort" data-sort="symbol" title="点击排序">代码</th>
-            <th class="pool-sort" data-sort="name" title="点击排序">名称</th>
-            <th class="pool-sort" data-sort="style" title="点击排序">类型</th>
-            <th class="pool-sort" data-sort="riseDate" title="次日预涨目标交易日；点击排序">预涨日</th>
-            <th class="pool-sort" data-sort="riseRet" title="预涨日收盘后结算；点击排序">预涨结果</th>
-            <th class="pool-sort" data-sort="last" title="点击排序">最新价</th>
-            <th class="pool-sort" data-sort="chg" title="点击排序">涨跌幅</th>
-            <th class="pool-sort" data-sort="qty" title="点击排序">持仓</th>
-            <th class="pool-sort" data-sort="avg" title="点击排序">成本</th>
-            <th class="pool-sort" data-sort="mv" title="点击排序">市值</th>
-            <th class="pool-sort" data-sort="upnl" title="(最新价−成本)/成本×100；点击排序">浮动盈亏/%</th>
-            <th class="pool-sort" data-sort="dayPnl" title="点击排序">今日盈亏</th>
-            <th class="pool-sort" data-sort="cash" title="点击排序">可用资金</th>
+            <th class="pool-sort" data-sort="symbol" title="点击排序"><span class="pool-th-label">代码</span></th>
+            <th class="pool-sort" data-sort="name" title="点击排序"><span class="pool-th-label">名称</span></th>
+            <th class="pool-sort" data-sort="style" title="点击排序"><span class="pool-th-label">类型</span></th>
+            <th class="pool-sort" data-sort="riseDate" title="次日预涨目标交易日；点击排序"><span class="pool-th-label">预涨日</span></th>
+            <th class="pool-sort" data-sort="riseRet" title="预涨日收盘后结算；点击排序"><span class="pool-th-label">预涨结果</span></th>
+            <th class="pool-sort" data-sort="last" title="点击排序"><span class="pool-th-label">最新价</span></th>
+            <th class="pool-sort" data-sort="chg" title="点击排序"><span class="pool-th-label">涨跌幅</span></th>
+            <th class="pool-sort" data-sort="qty" title="点击排序"><span class="pool-th-label">持仓</span></th>
+            <th class="pool-sort" data-sort="avg" title="点击排序"><span class="pool-th-label">成本</span></th>
+            <th class="pool-sort" data-sort="mv" title="点击排序"><span class="pool-th-label">市值</span></th>
+            <th class="pool-sort" data-sort="upnl" title="(最新价−成本)/成本×100；点击排序"><span class="pool-th-label">浮动盈亏/%</span></th>
+            <th class="pool-sort" data-sort="dayPnl" title="点击排序"><span class="pool-th-label">今日盈亏</span></th>
+            <th class="pool-sort" data-sort="cash" title="点击排序"><span class="pool-th-label">可用资金</span></th>
             <th title="目标日高低价预测（交易日15:00前=当日，否则下一交易日）；括号内为近史AI/ATR准确率">@forecastCol</th>
             <th>专属策略</th>
             <th>策略状态</th>
@@ -370,6 +370,24 @@
     </tbody>
 </table>
 </div>
+<div id="poolPager" class="d-flex justify-content-between align-items-center flex-wrap gap-2 my-2" data-page-size="20">
+    <div class="d-flex align-items-center flex-wrap gap-2 small text-muted">
+        <span id="poolPagerInfo">共 0 条</span>
+        <label class="mb-0 d-inline-flex align-items-center gap-1" for="poolPageSize">
+            每页
+            <select id="poolPageSize" class="form-select form-select-sm" style="width:auto;min-width:4.5rem;">
+                <option value="10">10</option>
+                <option value="20" selected>20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            条
+        </label>
+    </div>
+    <nav aria-label="股票池分页">
+        <ul class="pagination pagination-sm mb-0" id="poolPagerNav"></ul>
+    </nav>
+</div>
 
 <script>
 (function () {
@@ -565,6 +583,91 @@
         });
     }
 
+    const pagerEl = document.getElementById('poolPager');
+    const pagerInfo = document.getElementById('poolPagerInfo');
+    const pagerNav = document.getElementById('poolPagerNav');
+    const pageSizeSelect = document.getElementById('poolPageSize');
+    const pageSizeStorage = 'stocksim.pool.pageSize';
+    let pageSize = Math.max(5, parseInt(pagerEl?.dataset.pageSize || '20', 10) || 20);
+    try {
+        const savedSize = parseInt(localStorage.getItem(pageSizeStorage) || '', 10);
+        if ([10, 20, 50, 100].includes(savedSize)) pageSize = savedSize;
+    } catch { /* ignore */ }
+    if (pageSizeSelect) pageSizeSelect.value = String(pageSize);
+    let currentPage = 1;
+    let currentFilter = 'all';
+
+    function visibleRows() {
+        const f = currentFilter;
+        return Array.from(table.querySelectorAll('tbody tr[data-trade-style]')).filter(tr => {
+            const style = tr.getAttribute('data-trade-style');
+            return f === 'all' || style === f;
+        });
+    }
+
+    function renderPoolPager() {
+        if (!pagerNav || !pagerInfo) return;
+        const rows = visibleRows();
+        const total = rows.length;
+        const totalPages = Math.max(1, Math.ceil(total / pageSize) || 1);
+        if (currentPage > totalPages) currentPage = totalPages;
+        pagerInfo.textContent = total === 0
+            ? '共 0 条'
+            : `共 ${total} 条 · 第 ${currentPage} / ${totalPages} 页`;
+
+        table.querySelectorAll('tbody tr[data-trade-style]').forEach(tr => { tr.style.display = 'none'; });
+        const start = (currentPage - 1) * pageSize;
+        rows.slice(start, start + pageSize).forEach(tr => { tr.style.display = ''; });
+
+        pagerNav.innerHTML = '';
+        if (totalPages <= 1) return;
+
+        const addBtn = (label, page, disabled, active) => {
+            const li = document.createElement('li');
+            li.className = 'page-item' + (disabled ? ' disabled' : '') + (active ? ' active' : '');
+            const a = document.createElement(disabled || active ? 'span' : 'a');
+            a.className = 'page-link';
+            a.textContent = label;
+            if (!disabled && !active) {
+                a.href = '#';
+                a.addEventListener('click', e => {
+                    e.preventDefault();
+                    currentPage = page;
+                    renderPoolPager();
+                });
+            }
+            li.appendChild(a);
+            pagerNav.appendChild(li);
+        };
+
+        addBtn('上一页', currentPage - 1, currentPage <= 1, false);
+        let startP = Math.max(1, currentPage - 2);
+        let endP = Math.min(totalPages, currentPage + 2);
+        if (endP - startP < 4) {
+            startP = Math.max(1, endP - 4);
+            endP = Math.min(totalPages, startP + 4);
+        }
+        if (startP > 1) {
+            addBtn('1', 1, false, currentPage === 1);
+            if (startP > 2) addBtn('…', currentPage, true, false);
+        }
+        for (let i = startP; i <= endP; i++) addBtn(String(i), i, false, i === currentPage);
+        if (endP < totalPages) {
+            if (endP < totalPages - 1) addBtn('…', currentPage, true, false);
+            addBtn(String(totalPages), totalPages, false, currentPage === totalPages);
+        }
+        addBtn('下一页', currentPage + 1, currentPage >= totalPages, false);
+    }
+
+    pageSizeSelect?.addEventListener('change', () => {
+        const next = parseInt(pageSizeSelect.value, 10);
+        pageSize = [10, 20, 50, 100].includes(next) ? next : 20;
+        currentPage = 1;
+        try { localStorage.setItem(pageSizeStorage, String(pageSize)); } catch { /* ignore */ }
+        if (pagerEl) pagerEl.dataset.pageSize = String(pageSize);
+        renderPoolPager();
+    });
+
     function applySort(key, dir, persist) {
         const k = key || 'symbol';
         const d = dir === 'desc' ? 'desc' : 'asc';
@@ -581,6 +684,7 @@
         if (persist) {
             try { localStorage.setItem(sortKeyStorage, JSON.stringify({ key: k, dir: d })); } catch { /* ignore */ }
         }
+        renderPoolPager();
     }
 
     table.querySelectorAll('thead th.pool-sort').forEach(th => {
@@ -603,12 +707,10 @@
 
     function applyStyleFilter(filter) {
         const f = allowedFilters.has(filter) ? filter : 'all';
+        currentFilter = f;
+        currentPage = 1;
         document.querySelectorAll('[data-style-filter]').forEach(b => {
             b.classList.toggle('active', (b.getAttribute('data-style-filter') || 'all') === f);
-        });
-        table.querySelectorAll('tbody tr[data-trade-style]').forEach(tr => {
-            const style = tr.getAttribute('data-trade-style');
-            tr.style.display = (f === 'all' || style === f) ? '' : 'none';
         });
         try { localStorage.setItem(styleFilterKey, f); } catch { /* ignore */ }
         applySort(currentSort.key, currentSort.dir, false);

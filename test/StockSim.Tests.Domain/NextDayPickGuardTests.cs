@@ -27,6 +27,67 @@ public class NextDayPickGuardTests
     }
 
     [Fact]
+    public void Calibrate_Raises_On_Low_HitRate_And_MarketDrag()
+    {
+        var tags = new Dictionary<string, int>
+        {
+            [NextDayPickMetrics.TagMarketDrag] = 5
+        };
+        var t = NextDayPickGuard.CalibrateThresholds(
+            tags, sampleSize: 10, directionHitRatePct: 40m, missSampleSize: 6);
+        Assert.True(t.ConfidenceFloor >= 0.60m);
+        Assert.Equal(-1.0m, t.IndexWeakDayThresholdPct);
+        Assert.Equal(1.5m, t.WeakMarketMinRs5dPct);
+        Assert.True(t.PreferAbsoluteDirection);
+    }
+
+    [Fact]
+    public void Calibrate_MarketDrag_Half_Of_Misses_Tightens_Batch()
+    {
+        // 6/12 miss = 50% → MaxTheme=1, Confidence≥0.65, MaxPicks≤3（不依赖总命中率）
+        var tags = new Dictionary<string, int>
+        {
+            [NextDayPickMetrics.TagMarketDrag] = 6
+        };
+        var t = NextDayPickGuard.CalibrateThresholds(
+            tags, sampleSize: 20, directionHitRatePct: 55m, missSampleSize: 12);
+        Assert.Equal(1, t.MaxSameThemePerBatch);
+        Assert.True(t.ConfidenceFloor >= 0.65m);
+        Assert.True(t.MaxPicksPerBatch <= NextDayPickGuard.WeakMarketMaxPicksPerBatch);
+        Assert.True(t.PreferAbsoluteDirection);
+        Assert.Equal(-1.0m, t.IndexWeakDayThresholdPct);
+    }
+
+    [Fact]
+    public void IsExecutableAvoidPattern_And_SectorAlias()
+    {
+        Assert.True(NextDayPickGuard.IsExecutableAvoidPattern("高开低走追缺口"));
+        Assert.False(NextDayPickGuard.IsExecutableAvoidPattern("市场情绪一般需要观察"));
+        Assert.True(NextDayPickGuard.SectorAliasMatch("化学制药", "医药生物偏弱"));
+        Assert.True(NextDayPickGuard.SectorAliasMatch("光伏设备", "新能源"));
+        Assert.False(NextDayPickGuard.SectorAliasMatch("银行", "半导体"));
+    }
+
+    [Fact]
+    public void IsWeakMarketDay_Uses_Threshold()
+    {
+        var t = NextDayPickThresholds.Default with { IndexWeakDayThresholdPct = -1.0m };
+        Assert.True(NextDayPickGuard.IsWeakMarketDay(-1.2m, t));
+        Assert.False(NextDayPickGuard.IsWeakMarketDay(-0.5m, t));
+        Assert.False(NextDayPickGuard.IsWeakMarketDay(null, t));
+    }
+
+    [Fact]
+    public void ClassifyTheme_Blocks_Pure_Narrative()
+    {
+        Assert.Equal(NextDayThemeClass.NarrativeBlocked, NextDayPickGuard.ClassifyTheme("有重大利好"));
+        Assert.Equal(NextDayThemeClass.NarrativeBlocked, NextDayPickGuard.ClassifyTheme("重磅利好"));
+        Assert.Equal(NextDayThemeClass.SoftPenalty, NextDayPickGuard.ClassifyTheme("有利好"));
+        Assert.Equal(NextDayThemeClass.Ok, NextDayPickGuard.ClassifyTheme("有利好，持续放量"));
+        Assert.Equal(NextDayThemeClass.Ok, NextDayPickGuard.ClassifyTheme("超跌反弹"));
+    }
+
+    [Fact]
     public void Evaluate_Rejects_ChaseHigh()
     {
         var bars = new List<DailyBar>();

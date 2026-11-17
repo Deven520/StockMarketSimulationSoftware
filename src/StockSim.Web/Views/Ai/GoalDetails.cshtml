@@ -1,6 +1,16 @@
 @model StockSim.Application.Dtos.InvestmentGoalDetailDto
+@using StockSim.Application.Dtos
+@using StockSim.Web.Models
 @{
     var g = Model.Goal;
+    var stocksPage = ViewBag.StocksPage as PagedResult<InvestmentGoalStockDto>
+                     ?? PagedResult<InvestmentGoalStockDto>.From(Model.Stocks, 1, 20, "stocksPage");
+    var reviewsPage = ViewBag.ReviewsPage as PagedResult<NextDayPickReviewDto>
+                      ?? PagedResult<NextDayPickReviewDto>.From(
+                          Model.NextDayPickReviews ?? Array.Empty<NextDayPickReviewDto>(), 1, 20, "reviewsPage");
+    var progressPage = ViewBag.ProgressPage as PagedResult<GoalProgressDailyDto>
+                       ?? PagedResult<GoalProgressDailyDto>.From(
+                           Model.Progress.OrderByDescending(x => x.TradeDate), 1, 20, "progressPage");
 }
 <div class="mb-3 d-flex justify-content-between align-items-start flex-wrap gap-2">
     <div>
@@ -93,8 +103,8 @@
     </div>
 }
 
-<h5>入选股票</h5>
-<table class="table table-sm mb-4">
+<h5 id="stocks">入选股票</h5>
+<table class="table table-sm mb-2">
     <thead>
     <tr>
         <th>代码</th>
@@ -114,7 +124,7 @@
     </tr>
     </thead>
     <tbody>
-    @foreach (var s in Model.Stocks)
+    @foreach (var s in stocksPage.Items)
     {
         var logic = !string.IsNullOrWhiteSpace(s.SelectionLogic) ? s.SelectionLogic : s.Reason;
         <tr>
@@ -136,23 +146,69 @@
             <td class="small text-muted">@(s.Risk ?? "—")</td>
         </tr>
     }
-    @if (Model.Stocks.Count == 0)
+    @if (stocksPage.TotalCount == 0)
     {
         <tr><td colspan="11" class="text-muted">尚未确认入选</td></tr>
     }
     </tbody>
 </table>
+@{
+    var stocksPager = PagerModel.From(stocksPage, "stocks");
+}
+<partial name="_Pager" model="stocksPager" />
 
 @if (g.TradeStyle == StockSim.Domain.Enums.StockTradeStyle.NextDayRise)
 {
     <h5>次日预涨复盘</h5>
+    @if (Model.NextDayCalibration is { } cal)
+    {
+        <div class="border rounded p-3 mb-3 small">
+            <div class="fw-semibold mb-2">近 @cal.WindowDays 天校准摘要（全库复盘）</div>
+            <div class="row g-2 mb-2">
+                <div class="col-md-3">样本 <strong>@cal.SampleSize</strong></div>
+                <div class="col-md-3">方向命中率 <strong>@(cal.DirectionHitRatePct?.ToString("N1") ?? "-")%</strong></div>
+                <div class="col-md-3">置信门槛 <strong>@cal.ConfidenceFloor.ToString("0.##")</strong></div>
+                <div class="col-md-3">弱市指数阈 <strong>@cal.IndexWeakDayThresholdPct.ToString("0.#")%</strong> / RS≥@cal.WeakMarketMinRs5dPct.ToString("0.#")%</div>
+            </div>
+            <div class="row g-2 mb-2">
+                <div class="col-md-3">MarketDrag/未中 <strong>@(cal.MarketDragMissPct?.ToString("N1") ?? "-")%</strong>（未中 @cal.MissSampleSize）</div>
+                <div class="col-md-3">未中但跑赢指数 <strong>@cal.MissButBeatIndexCount</strong></div>
+                <div class="col-md-3">同题材上限 <strong>@cal.MaxSameThemePerBatch</strong> / 批次≤@cal.MaxPicksPerBatch</div>
+                <div class="col-md-3">@(cal.PreferAbsoluteDirection ? "已启用：绝对方向优先" : "绝对方向：常规")</div>
+            </div>
+            @if (cal.TopFailureTags.Count > 0)
+            {
+                <div class="mb-1">错因 Top：
+                    @string.Join(" · ", cal.TopFailureTags.Select(t => $"{t.Tag}×{t.Count}"))
+                </div>
+            }
+            @if (cal.WeakThemes.Count > 0)
+            {
+                <div class="mb-1 text-warning">弱题材降权：@string.Join("、", cal.WeakThemes)</div>
+            }
+            @if (cal.ThemeHitRates.Count > 0)
+            {
+                <div class="text-muted">题材命中：
+                    @string.Join(" · ", cal.ThemeHitRates.Take(6).Select(t => $"{t.Theme} {t.DirectionHitRatePct:0.#}%({t.SampleSize})"))
+                </div>
+            }
+            @if (cal.BlockHighOpenChase)
+            {
+                <div class="text-danger mt-1">已启用：高开低走追缺口拦截</div>
+            }
+            @if (cal.PreferAbsoluteDirection || cal.MarketDragMissPct is >= 50m)
+            {
+                <div class="text-danger mt-1">弱市闸门生效：指数弱日缩批次/抬置信；须绝对收涨+相对不弱</div>
+            }
+        </div>
+    }
     @if (Model.NextDayPickReviews is not { Count: > 0 })
     {
         <p class="text-muted small">暂无复盘。对账完成后可点「入队选股复盘」，或等日终结算自动入队。</p>
     }
     else
     {
-        <div class="table-responsive mb-4">
+        <div class="table-responsive mb-2" id="reviews">
             <table class="table table-sm table-hover">
                 <thead>
                 <tr>
@@ -169,7 +225,7 @@
                 </tr>
                 </thead>
                 <tbody>
-                @foreach (var r in Model.NextDayPickReviews!)
+                @foreach (var r in reviewsPage.Items)
                 {
                     <tr>
                         <td>@r.TargetTradeDate.ToString("yyyy-MM-dd")</td>
@@ -189,10 +245,12 @@
                 </tbody>
             </table>
         </div>
+        var reviewsPager = PagerModel.From(reviewsPage, "reviews");
+        <partial name="_Pager" model="reviewsPager" />
     }
 }
 
-<h5>每日达成率</h5>
+<h5 id="progress">每日达成率</h5>
 <table class="table table-sm table-hover">
     <thead>
     <tr>
@@ -207,7 +265,7 @@
     </tr>
     </thead>
     <tbody>
-    @foreach (var p in Model.Progress.OrderByDescending(x => x.TradeDate))
+    @foreach (var p in progressPage.Items)
     {
         <tr>
             <td>@p.TradeDate.ToString("yyyy-MM-dd")</td>
@@ -220,9 +278,13 @@
             <td class="small text-muted">@p.Notes</td>
         </tr>
     }
-    @if (Model.Progress.Count == 0)
+    @if (progressPage.TotalCount == 0)
     {
         <tr><td colspan="8" class="text-muted text-center py-3">暂无进度（确认入选后开始记录）</td></tr>
     }
     </tbody>
 </table>
+@{
+    var progressPager = PagerModel.From(progressPage, "progress");
+}
+<partial name="_Pager" model="progressPager" />

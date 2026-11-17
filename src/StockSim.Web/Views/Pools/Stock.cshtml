@@ -151,7 +151,10 @@
         }
         else
         {
-            <div class="table-responsive" style="max-height:360px;overflow:auto;">
+            var reviewsPage = ViewBag.ReviewsPage as StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.DailyTReviewDto>
+                ?? StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.DailyTReviewDto>.From(Model.DailyTReviews!, 1, 10, "reviewsPage");
+            var reviewsPager = StockSim.Web.Models.PagerModel.From(reviewsPage, "daily-t-reviews");
+            <div class="table-responsive" style="max-height:360px;overflow:auto;" id="daily-t-reviews">
                 <table class="table table-sm table-dark table-striped mb-0">
                     <thead>
                     <tr>
@@ -168,7 +171,7 @@
                     </tr>
                     </thead>
                     <tbody>
-                    @foreach (var row in Model.DailyTReviews!)
+                    @foreach (var row in reviewsPage.Items)
                     {
                         <tr>
                             <td>@row.TradeDate.ToString("yyyy-MM-dd")</td>
@@ -186,6 +189,7 @@
                     </tbody>
                 </table>
             </div>
+            <div class="px-2"><partial name="_Pager" model="reviewsPager" /></div>
             <div class="small text-muted p-2">
                 复盘评估做T质量时以配对价差为准；账面日盈亏按持仓成本口径。夜更会读取近几日 strategyHints。
             </div>
@@ -202,6 +206,9 @@
         }
         else
         {
+            var forecastPage = ViewBag.ForecastPage as StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.PriceRangeForecastDto>
+                ?? StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.PriceRangeForecastDto>.From(Model.ForecastHistory!, 1, 10, "forecastPage");
+            var forecastPager = StockSim.Web.Models.PagerModel.From(forecastPage, "forecast-history");
             <div class="table-responsive" style="max-height:320px;overflow:auto;">
                 <table class="table table-sm table-dark table-striped mb-0">
                     <thead>
@@ -223,7 +230,7 @@
                     </tr>
                     </thead>
                     <tbody>
-                    @foreach (var row in Model.ForecastHistory!)
+                    @foreach (var row in forecastPage.Items)
                     {
                         <tr>
                             <td>@row.Name @row.Symbol</td>
@@ -253,6 +260,7 @@
                     </tbody>
                 </table>
             </div>
+            <div class="px-2"><partial name="_Pager" model="forecastPager" /></div>
             <div class="small text-muted p-2">
                 每晚约 22:00（及补跑）仅用真源日K对账；未收盘/无日K/模拟行情不对账。综合得分容差 5%（平均绝对偏差%）。交易日 15:00 前预测当日，否则下一交易日。盘中做 T 会用有效预测作软边界（须接近预测高/低区才触发）。
                 @if (Model.AvgCombinedAccuracyPct.HasValue)

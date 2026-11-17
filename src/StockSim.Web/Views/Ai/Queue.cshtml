@@ -1,4 +1,4 @@
-@model IReadOnlyList<StockSim.Application.Dtos.AiQueueItemDto>
+@model StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.AiQueueItemDto>
 @using StockSim.Domain.Enums
 @{
     var counts = ((int Pending, int Running, int Succeeded, int Failed)?)ViewBag.Counts;
@@ -76,7 +76,7 @@
         </tr>
         </thead>
         <tbody>
-        @foreach (var x in Model)
+        @foreach (var x in Model.Items)
         {
             var rowClass = highlight == x.Id ? "table-warning" : "";
             <tr class="@rowClass">
@@ -108,20 +108,21 @@
                 <tr class="@rowClass"><td colspan="8" class="small text-danger py-1">@x.ErrorMessage</td></tr>
             }
         }
-        @if (Model.Count == 0)
+        @if (Model.Items.Count == 0)
         {
             <tr><td colspan="8" class="text-muted text-center py-4">暂无队列记录</td></tr>
         }
         </tbody>
     </table>
 </div>
+<partial name="_Pager" model="PagerModel.From(Model)" />
 
 <p class="small text-muted">页面每 8 秒自动刷新（执行中/排队中时便于观察进度）。</p>
 
 @section Scripts {
 <script>
 (() => {
-  const hasActive = @((Model.Any(x => x.Status is AiQueueItemStatus.Pending or AiQueueItemStatus.Running)).ToString().ToLowerInvariant());
+  const hasActive = @((Model.Items.Any(x => x.Status is AiQueueItemStatus.Pending or AiQueueItemStatus.Running)).ToString().ToLowerInvariant());
   if (hasActive) setTimeout(() => location.reload(), 8000);
 })();
 </script>

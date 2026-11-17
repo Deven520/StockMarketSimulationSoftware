@@ -257,9 +257,13 @@ public sealed class NextDayPickReviewAppService
         {
             if (!poolMap.TryGetValue(gs.Symbol, out var item)) continue;
             var expected = goals.TryGetValue(gs.InvestmentGoalId, out var g) ? g.ExpectedReturnPct : 0m;
-            var baseline = gs.BaselinePrice is > 0 ? gs.BaselinePrice.Value : item.RiseBaselinePrice!.Value;
+            // 与池结算统一：优先用池侧「目标日前收」基准
+            var baseline = item.RiseBaselinePrice is > 0
+                ? item.RiseBaselinePrice.Value
+                : (gs.BaselinePrice is > 0 ? gs.BaselinePrice.Value : 0m);
+            if (baseline <= 0) continue;
             var (ret, dir, tgt) = NextDayPickMetrics.Evaluate(baseline, item.RiseActualClose!.Value, expected);
-            gs.BaselinePrice ??= baseline;
+            gs.BaselinePrice = baseline;
             gs.ActualClose = item.RiseActualClose;
             gs.NextDayReturnPct = ret;
             gs.DirectionHit = dir;
@@ -615,7 +619,14 @@ public sealed class NextDayPickReviewAppService
                 review.ReturnPct.Value, indexRet);
         }
 
-        if (string.IsNullOrWhiteSpace(review.FailureTagsJson) && review.DirectionHit == false)
+        // 始终用 OHLC 重算并合并标签；命中则清空
+        if (review.DirectionHit == true)
+        {
+            review.FailureTagsJson = null;
+            return;
+        }
+
+        if (review.DirectionHit == false)
         {
             decimal? openGap = null;
             var bar = detail.DailyBars?.FirstOrDefault(b => b.Date.Date == target);
@@ -635,10 +646,12 @@ public sealed class NextDayPickReviewAppService
                     nearHigh = review.BaselinePrice.Value >= hi20 * 0.97m;
             }
 
-            var tags = NextDayPickMetrics.InferFailureTags(
+            var inferred = NextDayPickMetrics.InferFailureTags(
                 false, review.ReturnPct ?? 0m, review.RelativeStrengthPct, openGap, nearHigh);
-            review.FailureTagsJson = tags.Count > 0
-                ? JsonSerializer.Serialize(tags, JsonOpts)
+            var existing = ParseTags(review.FailureTagsJson);
+            var merged = NextDayPickMetrics.MergeFailureTags(false, inferred, existing);
+            review.FailureTagsJson = merged.Count > 0
+                ? JsonSerializer.Serialize(merged, JsonOpts)
                 : null;
         }
     }
@@ -790,15 +803,22 @@ public sealed class NextDayPickReviewAppService
         if (json["pickHints"] is JsonNode hints)
             review.PickHintsJson = hints.ToJsonString(JsonOpts);
 
-        if (json["failureTags"] is JsonArray arr)
+        if (review.DirectionHit == true)
         {
-            var tags = arr.Select(n => n?.ToString()?.Trim().Trim('"'))
+            review.FailureTagsJson = null;
+        }
+        else if (json["failureTags"] is JsonArray arr)
+        {
+            var aiTags = arr.Select(n => n?.ToString()?.Trim().Trim('"'))
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .Cast<string>()
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            if (tags.Count > 0)
-                review.FailureTagsJson = JsonSerializer.Serialize(tags, JsonOpts);
+            var existing = ParseTags(review.FailureTagsJson);
+            var merged = NextDayPickMetrics.MergeFailureTags(false, existing, aiTags);
+            review.FailureTagsJson = merged.Count > 0
+                ? JsonSerializer.Serialize(merged, JsonOpts)
+                : null;
         }
 
         var findings = new JsonObject();

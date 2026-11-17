@@ -1,4 +1,4 @@
-@model IReadOnlyList<StockSim.Application.Dtos.DailyPnLDto>
+@model StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.DailyPnLDto>
 <div class="d-flex justify-content-between mb-3">
     <h2>盈亏分析</h2>
     <form asp-action="Settle" method="post"><button class="btn btn-outline-primary">执行今日日终结算</button></form>
@@ -10,7 +10,7 @@
 <table class="table table-sm table-striped">
     <thead><tr><th>日期</th><th>代码</th><th>名称</th><th>笔数</th><th>已实现盈亏</th><th>费用</th><th>胜率</th><th></th></tr></thead>
     <tbody>
-    @foreach (var x in Model)
+    @foreach (var x in Model.Items)
     {
         <tr>
             <td>@x.TradeDate.ToString("yyyy-MM-dd")</td>
@@ -29,5 +29,10 @@
             </td>
         </tr>
     }
+    @if (Model.Items.Count == 0)
+    {
+        <tr><td colspan="8" class="text-muted text-center py-3">暂无盈亏记录</td></tr>
+    }
     </tbody>
 </table>
+<partial name="_Pager" model="PagerModel.From(Model)" />

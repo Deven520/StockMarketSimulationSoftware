@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using StockSim.Application.Dtos;
 using StockSim.Application.Services;
+using StockSim.Web.Models;
 
 namespace StockSim.Web.Controllers;
 
@@ -15,11 +16,12 @@ public class StrategiesController : Controller
         _pools = pools;
     }
 
-    public async Task<IActionResult> Index(CancellationToken ct)
+    public async Task<IActionResult> Index(int page = 1, int pageSize = 10, CancellationToken ct = default)
     {
         ViewData["Title"] = "策略中心";
         ViewBag.Pools = await _pools.GetPoolsAsync(ct);
-        return View(await _strategies.ListAsync(ct));
+        var all = await _strategies.ListAsync(ct);
+        return View(PagedResult<StrategyDto>.From(all, page, pageSize));
     }
 
     [HttpPost]

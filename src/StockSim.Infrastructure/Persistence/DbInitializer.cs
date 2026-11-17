@@ -123,6 +123,8 @@ public static class DbInitializer
                 await TryAddSqliteColumnAsync(db, "AppAiSuggestions", "Reason", "TEXT");
                 await TryAddSqliteColumnAsync(db, "AppAiSuggestions", "SelectionLogic", "TEXT");
                 await TryAddSqliteColumnAsync(db, "AppAiSuggestions", "Risk", "TEXT");
+                await TryAddSqliteColumnAsync(db, "AppAiSuggestions", "IsHardRejected", "INTEGER NOT NULL DEFAULT 0");
+                await TryAddSqliteColumnAsync(db, "AppAiSuggestions", "FilterRejectReason", "TEXT");
             }
             else if (provider.Contains("SqlServer", StringComparison.OrdinalIgnoreCase))
             {
@@ -134,6 +136,8 @@ public static class DbInitializer
                     IF COL_LENGTH('AppAiSuggestions', 'Reason') IS NULL ALTER TABLE AppAiSuggestions ADD Reason nvarchar(max) NULL;
                     IF COL_LENGTH('AppAiSuggestions', 'SelectionLogic') IS NULL ALTER TABLE AppAiSuggestions ADD SelectionLogic nvarchar(max) NULL;
                     IF COL_LENGTH('AppAiSuggestions', 'Risk') IS NULL ALTER TABLE AppAiSuggestions ADD Risk nvarchar(max) NULL;
+                    IF COL_LENGTH('AppAiSuggestions', 'IsHardRejected') IS NULL ALTER TABLE AppAiSuggestions ADD IsHardRejected bit NOT NULL CONSTRAINT DF_AppAiSuggestions_IsHardRejected DEFAULT 0;
+                    IF COL_LENGTH('AppAiSuggestions', 'FilterRejectReason') IS NULL ALTER TABLE AppAiSuggestions ADD FilterRejectReason nvarchar(max) NULL;
                     """);
             }
         }

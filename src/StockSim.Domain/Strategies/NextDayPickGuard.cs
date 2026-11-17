@@ -14,6 +14,9 @@ public static class NextDayPickGuard
 
     public const decimal ConfidenceFloor = 0.55m;
     public const int MaxSameThemePerBatch = 2;
+    /// <summary>默认一批最多入选只数；弱市/高 MarketDrag 时下调。</summary>
+    public const int MaxPicksPerBatch = 5;
+    public const int WeakMarketMaxPicksPerBatch = 3;
 
     /// <summary>距 20 日高点不足该百分比视为追高区。</summary>
     public const decimal ChaseHighNearHighPct = 3.0m;
@@ -35,6 +38,35 @@ public static class NextDayPickGuard
 
     /// <summary>日成交额下限（元），过低视为流动性陷阱。</summary>
     public const decimal MinAmountYuan = 80_000_000m;
+
+    /// <summary>题材结构化分级：纯叙事拦截 / 弱约束抬门槛 / 正常。</summary>
+    public static NextDayThemeClass ClassifyTheme(string? theme)
+    {
+        if (string.IsNullOrWhiteSpace(theme)) return NextDayThemeClass.Ok;
+        var t = theme.Trim();
+        var hasSupport = ContainsAny(t, "放量", "量能", "成交额", "超跌", "反弹", "底部", "低位", "企稳", "低估");
+        var heavyNarrative = ContainsAny(t, "重大利好", "重磅利好", "重大消息", "突发利好", "重磅消息");
+        if (heavyNarrative && !hasSupport)
+            return NextDayThemeClass.NarrativeBlocked;
+
+        // 纯「有利好/利好」类、无量能或超跌约束 → 软降权（抬 confidence）
+        if (!hasSupport && ContainsAny(t, "利好", "政策催化", "消息催化"))
+            return NextDayThemeClass.SoftPenalty;
+
+        return NextDayThemeClass.Ok;
+    }
+
+    public static string? ThemeClassHint(NextDayThemeClass cls) => cls switch
+    {
+        NextDayThemeClass.NarrativeBlocked =>
+            "题材偏纯叙事（如「重大利好」且无放量/超跌约束），入库将被拦截；建议改为「超跌反弹」或「有利好+持续放量」等可验证约束。",
+        NextDayThemeClass.SoftPenalty =>
+            "题材偏叙事、缺少量能/超跌约束，将抬高置信度门槛并限制新闻/题材类催化。",
+        _ => null
+    };
+
+    private static bool ContainsAny(string text, params string[] needles) =>
+        needles.Any(n => text.Contains(n, StringComparison.OrdinalIgnoreCase));
 
     public static decimal ClampExpectedReturnPct(decimal expectedReturnPct)
     {
@@ -131,10 +163,15 @@ public static class NextDayPickGuard
         catch { return false; }
     }
 
-    /// <summary>根据近周错因标签上调阈值（回调）。</summary>
+    /// <summary>
+    /// 根据近周错因标签与方向命中率上调阈值。
+    /// CorrectThesisWrongTiming 不参与追高/弱势等占比；MarketDrag 按未中样本占比。
+    /// </summary>
     public static NextDayPickThresholds CalibrateThresholds(
         IReadOnlyDictionary<string, int> tagCounts,
-        int sampleSize)
+        int sampleSize,
+        decimal? directionHitRatePct = null,
+        int missSampleSize = 0)
     {
         var t = NextDayPickThresholds.Default;
         if (sampleSize < 5) return t;
@@ -143,6 +180,7 @@ public static class NextDayPickGuard
         var weak = CountTag(tagCounts, NextDayPickMetrics.TagWeakRelative);
         var gap = CountTag(tagCounts, NextDayPickMetrics.TagGapDownOpen);
         var fade = CountTag(tagCounts, NextDayPickMetrics.TagThemeFade);
+        var drag = CountTag(tagCounts, NextDayPickMetrics.TagMarketDrag);
 
         if (chase * 100m / sampleSize >= 20m)
             t = t with { ChaseHighNearHighPct = 4.0m, ChaseHighRecentGainPct = 4.0m };
@@ -153,8 +191,105 @@ public static class NextDayPickGuard
         if (fade * 100m / sampleSize >= 20m)
             t = t with { ThemeHitRateFloorPct = 45.0m, ConfidenceFloor = 0.60m };
 
+        if (directionHitRatePct is < 45m && sampleSize >= 8)
+        {
+            t = t with
+            {
+                ConfidenceFloor = Math.Max(t.ConfidenceFloor, 0.60m),
+                IndexWeakDayThresholdPct = -1.0m
+            };
+        }
+
+        var missBase = missSampleSize > 0 ? missSampleSize : sampleSize;
+        var dragPctOfMiss = missBase > 0 ? drag * 100m / missBase : 0m;
+        if (missBase >= 5 && dragPctOfMiss >= 40m)
+        {
+            t = t with
+            {
+                WeakMarketMinRs5dPct = 1.5m,
+                IndexWeakDayThresholdPct = Math.Max(t.IndexWeakDayThresholdPct, -1.0m),
+                PreferAbsoluteDirection = true
+            };
+        }
+
+        // MarketDrag 占未中 ≥50%：同题材上限 1、置信抬到 0.65、弱市缩批次（不依赖总命中率）
+        if (missBase >= 5 && dragPctOfMiss >= 50m)
+        {
+            t = t with
+            {
+                MaxSameThemePerBatch = 1,
+                ConfidenceFloor = Math.Max(t.ConfidenceFloor, 0.65m),
+                MaxPicksPerBatch = Math.Min(t.MaxPicksPerBatch, WeakMarketMaxPicksPerBatch),
+                PreferAbsoluteDirection = true,
+                IndexWeakDayThresholdPct = Math.Max(t.IndexWeakDayThresholdPct, -1.0m),
+                WeakMarketMinRs5dPct = Math.Max(t.WeakMarketMinRs5dPct, 1.5m)
+            };
+        }
+
         return t;
     }
+
+    /// <summary>指数近 1 日涨跌%（无数据返回 null）。</summary>
+    public static decimal? TryIndexReturn1d(StockDetailBundle? indexDetail, DateTime asOf)
+    {
+        if (indexDetail is null || indexDetail.IsSimulated || indexDetail.DailyBars is null)
+            return null;
+        var bars = indexDetail.DailyBars
+            .Where(b => b.Date.Date <= asOf.Date && b.Close > 0)
+            .OrderBy(b => b.Date)
+            .ToList();
+        return ReturnN(bars, 1);
+    }
+
+    /// <summary>是否弱市日（指数近 1 日 ≤ 阈值）。</summary>
+    public static bool IsWeakMarketDay(decimal? index1dPct, NextDayPickThresholds thresholds) =>
+        index1dPct is not null && index1dPct.Value <= thresholds.IndexWeakDayThresholdPct;
+
+    /// <summary>avoidPatterns 是否含可执行关键词（过长叙事不进硬匹配）。</summary>
+    public static bool IsExecutableAvoidPattern(string? pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern)) return false;
+        var p = pattern.Trim();
+        if (p.Length < 4 || p.Length > 48) return false;
+        return ContainsAny(p,
+            "追高", "高开", "低走", "无放量", "放量滞涨", "缺口", "跌停", "弱市", "阴跌",
+            "接盘", "一字", "无量", "破位", "杀跌", "冲高回落", "高位放量");
+    }
+
+    /// <summary>板块/行业别名：复盘降权主题与候选行业模糊对齐。</summary>
+    public static bool SectorAliasMatch(string? text, string? themeOrPattern)
+    {
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(themeOrPattern))
+            return false;
+        if (text.Contains(themeOrPattern, StringComparison.OrdinalIgnoreCase)
+            || themeOrPattern.Contains(text, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        foreach (var (key, aliases) in SectorAliases)
+        {
+            var themeHit = themeOrPattern.Contains(key, StringComparison.OrdinalIgnoreCase)
+                           || aliases.Any(a => themeOrPattern.Contains(a, StringComparison.OrdinalIgnoreCase));
+            if (!themeHit) continue;
+            if (text.Contains(key, StringComparison.OrdinalIgnoreCase)) return true;
+            if (aliases.Any(a => text.Contains(a, StringComparison.OrdinalIgnoreCase))) return true;
+        }
+
+        return false;
+    }
+
+    private static readonly IReadOnlyDictionary<string, string[]> SectorAliases =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["医药"] = new[] { "医疗", "生物", "中药", "化学制药", "医美", "CXO", "创新药", "医保" },
+            ["物流"] = new[] { "快递", "航运", "交运", "仓储", "顺丰" },
+            ["地产"] = new[] { "房地产", "物业", "建筑装饰", "水泥", "建材" },
+            ["新能源"] = new[] { "光伏", "锂电", "储能", "风电", "电池", "逆变器" },
+            ["军工"] = new[] { "国防", "航空", "航天", "船舶" },
+            ["金融"] = new[] { "银行", "证券", "保险", "券商" },
+            ["消费"] = new[] { "白酒", "食品", "零售", "家电", "餐饮" },
+            ["半导体"] = new[] { "芯片", "集成电路", "光刻", "晶圆" },
+            ["机器人"] = new[] { "工业自动化", "智能制造", "机床" }
+        };
 
     private static int CountTag(IReadOnlyDictionary<string, int> tags, string name) =>
         tags.TryGetValue(name, out var n) ? n : 0;
@@ -279,7 +414,9 @@ public sealed record NextDayPickThresholds(
     decimal ThemeHitRateFloorPct,
     decimal MinAmountYuan,
     int MaxSameThemePerBatch,
-    bool BlockHighOpenChase)
+    bool BlockHighOpenChase,
+    int MaxPicksPerBatch = NextDayPickGuard.MaxPicksPerBatch,
+    bool PreferAbsoluteDirection = false)
 {
     public static NextDayPickThresholds Default { get; } = new(
         NextDayPickGuard.ConfidenceFloor,
@@ -291,7 +428,9 @@ public sealed record NextDayPickThresholds(
         NextDayPickGuard.ThemeHitRateFloorPct,
         NextDayPickGuard.MinAmountYuan,
         NextDayPickGuard.MaxSameThemePerBatch,
-        BlockHighOpenChase: false);
+        BlockHighOpenChase: false,
+        MaxPicksPerBatch: NextDayPickGuard.MaxPicksPerBatch,
+        PreferAbsoluteDirection: false);
 }
 
 public sealed record NextDayPickFilterVerdict(
@@ -310,4 +449,11 @@ public sealed record NextDayPickFilterVerdict(
 
     public static NextDayPickFilterVerdict Reject(string reason, bool soft = false) =>
         new(false, reason, soft, null, null, null);
+}
+
+public enum NextDayThemeClass
+{
+    Ok = 0,
+    SoftPenalty = 1,
+    NarrativeBlocked = 2
 }

@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Mvc;
 using StockSim.Application.Dtos;
 using StockSim.Application.Services;
 using StockSim.Domain.Enums;
+using StockSim.Domain.Strategies;
+using StockSim.Web.Models;
 
 namespace StockSim.Web.Controllers;
 
@@ -27,13 +29,16 @@ public class AiController : Controller
         _nextDayPickReviews = nextDayPickReviews;
     }
 
-    public async Task<IActionResult> Index(CancellationToken ct)
+    public async Task<IActionResult> Index(int page = 1, int pageSize = 20, CancellationToken ct = default)
     {
         ViewData["Title"] = "AI 工作台";
         ViewBag.CursorStatus = await _ai.GetCursorConnectionStatusAsync(ct);
         ViewBag.Goals = await _goals.ListAsync(ct);
         ViewBag.QueueCounts = await _queue.CountByStatusAsync(ct);
-        return View(await _ai.ListJobsAsync(ct));
+        var jobs = (await _ai.ListJobsAsync(ct))
+            .Where(x => x.JobType == AiJobType.StockPick)
+            .ToList();
+        return View(PagedResult<AiJobDto>.From(jobs, page, pageSize));
     }
 
     /// <summary>目标驱动选股：入队异步执行（Goal→Prompt→选股），立即返回。</summary>
@@ -49,7 +54,14 @@ public class AiController : Controller
         {
             var (goal, job, queueId) = await _goals.CreateGoalAndPickAsync(
                 new CreateInvestmentGoalRequest(expectedReturnPct, horizonDays, themePreference, tradeStyle), ct);
-            TempData["Msg"] = $"已提交 AI 队列（任务 {queueId.ToString()[..8]}…）。完成后可在选股结果中勾选入库。";
+            var msg = $"已提交 AI 队列（任务 {queueId.ToString()[..8]}…）。完成后可在选股结果中勾选入库。";
+            if (tradeStyle == StockTradeStyle.NextDayRise)
+            {
+                var hint = NextDayPickGuard.ThemeClassHint(NextDayPickGuard.ClassifyTheme(themePreference));
+                if (!string.IsNullOrWhiteSpace(hint))
+                    msg += " " + hint;
+            }
+            TempData["Msg"] = msg;
             TempData["MsgType"] = "success";
             return RedirectToAction(nameof(Queue), new { highlight = queueId });
         }
@@ -62,7 +74,12 @@ public class AiController : Controller
     }
 
     /// <summary>AI 统一队列：排队中 / 执行中 / 成功失败与入参出参。</summary>
-    public async Task<IActionResult> Queue(string? status, Guid? highlight, CancellationToken ct)
+    public async Task<IActionResult> Queue(
+        string? status,
+        Guid? highlight,
+        int page = 1,
+        int pageSize = 20,
+        CancellationToken ct = default)
     {
         ViewData["Title"] = "AI 队列";
         ViewBag.Highlight = highlight;
@@ -74,7 +91,8 @@ public class AiController : Controller
             && Enum.TryParse<AiQueueItemStatus>(status, true, out var st))
             filter = st;
 
-        return View(await _queue.ListAsync(filter, 150, ct));
+        var (items, total) = await _queue.ListPagedAsync(filter, page, pageSize, ct);
+        return View(PagedResult<AiQueueItemDto>.Create(items, page, pageSize, total));
     }
 
     public async Task<IActionResult> QueueDetails(Guid id, CancellationToken ct)
@@ -85,17 +103,32 @@ public class AiController : Controller
         return View(detail);
     }
 
-    public async Task<IActionResult> Goals(CancellationToken ct)
+    public async Task<IActionResult> Goals(int page = 1, int pageSize = 20, CancellationToken ct = default)
     {
         ViewData["Title"] = "投资目标与达成率";
-        return View(await _goals.ListAsync(ct));
+        var all = await _goals.ListAsync(ct);
+        return View(PagedResult<InvestmentGoalDto>.From(all, page, pageSize));
     }
 
-    public async Task<IActionResult> GoalDetails(Guid id, CancellationToken ct)
+    public async Task<IActionResult> GoalDetails(
+        Guid id,
+        int stocksPage = 1,
+        int reviewsPage = 1,
+        int progressPage = 1,
+        int pageSize = 20,
+        CancellationToken ct = default)
     {
         var detail = await _goals.GetDetailAsync(id, ct);
         if (detail is null) return NotFound();
         ViewData["Title"] = "目标详情";
+        ViewBag.StocksPage = PagedResult<InvestmentGoalStockDto>.From(
+            detail.Stocks, stocksPage, pageSize, "stocksPage");
+        ViewBag.ReviewsPage = PagedResult<NextDayPickReviewDto>.From(
+            detail.NextDayPickReviews ?? Array.Empty<NextDayPickReviewDto>(),
+            reviewsPage, pageSize, "reviewsPage");
+        ViewBag.ProgressPage = PagedResult<GoalProgressDailyDto>.From(
+            detail.Progress.OrderByDescending(x => x.TradeDate),
+            progressPage, pageSize, "progressPage");
         return View(detail);
     }
 
@@ -170,7 +203,7 @@ public class AiController : Controller
         return q > 0 ? RedirectToAction(nameof(Queue)) : RedirectToAction(nameof(Index));
     }
 
-    public async Task<IActionResult> Details(Guid id, Guid? goalId, CancellationToken ct)
+    public async Task<IActionResult> Details(Guid id, Guid? goalId, CancellationToken ct = default)
     {
         var detail = await _ai.GetJobDetailAsync(id, ct);
         if (detail is null) return NotFound();
@@ -198,12 +231,17 @@ public class AiController : Controller
 
     public IActionResult Suggestions(Guid jobId) => RedirectToAction(nameof(Details), new { id = jobId });
 
-    /// <summary>勾选多只建议股确认入池并激活目标。</summary>
+    /// <summary>勾选多只建议股确认入池并激活目标。force=true 可绕过次日硬过滤。</summary>
     [HttpPost]
-    public async Task<IActionResult> AcceptGoalPicks(Guid goalId, Guid jobId, Guid[]? suggestionIds, CancellationToken ct)
+    public async Task<IActionResult> AcceptGoalPicks(
+        Guid goalId,
+        Guid jobId,
+        Guid[]? suggestionIds,
+        bool force = false,
+        CancellationToken ct = default)
     {
         var ids = suggestionIds ?? Array.Empty<Guid>();
-        var result = await _goals.AcceptSuggestionsAsync(goalId, ids, ct);
+        var result = await _goals.AcceptSuggestionsAsync(goalId, ids, force, ct);
         TempData["Msg"] = result.Message;
         TempData["MsgType"] = result.Ok ? "success" : "danger";
         return result.Ok
@@ -218,11 +256,12 @@ public class AiController : Controller
         bool accept,
         Guid? poolId,
         Guid? goalId,
-        CancellationToken ct)
+        bool force = false,
+        CancellationToken ct = default)
     {
         if (goalId.HasValue && accept)
         {
-            var result = await _goals.AcceptSuggestionsAsync(goalId.Value, [suggestionId], ct);
+            var result = await _goals.AcceptSuggestionsAsync(goalId.Value, [suggestionId], force, ct);
             TempData["Msg"] = result.Message;
             TempData["MsgType"] = result.Ok ? "success" : "danger";
             return result.Ok

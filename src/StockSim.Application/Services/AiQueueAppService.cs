@@ -102,17 +102,30 @@ public sealed class AiQueueAppService
         int take = 100,
         CancellationToken ct = default)
     {
-        take = Math.Clamp(take, 1, 500);
+        var (items, _) = await ListPagedAsync(status, page: 1, pageSize: take, ct);
+        return items;
+    }
+
+    public async Task<(IReadOnlyList<AiQueueItemDto> Items, int TotalCount)> ListPagedAsync(
+        AiQueueItemStatus? status = null,
+        int page = 1,
+        int pageSize = 20,
+        CancellationToken ct = default)
+    {
+        pageSize = Math.Clamp(pageSize, 5, 100);
+        page = Math.Max(1, page);
         var q = _db.AiQueueItems.AsQueryable();
         if (status.HasValue)
             q = q.Where(x => x.Status == status.Value);
 
+        var total = await q.CountAsync(ct);
         var rows = await q
             .OrderByDescending(x => x.CreationTime)
-            .Take(take)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .ToListAsync(ct);
 
-        return rows.Select(MapDto).ToList();
+        return (rows.Select(MapDto).ToList(), total);
     }
 
     public async Task<(int Pending, int Running, int Succeeded, int Failed)> CountByStatusAsync(

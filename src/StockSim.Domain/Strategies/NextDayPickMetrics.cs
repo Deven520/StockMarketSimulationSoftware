@@ -70,6 +70,34 @@ public static class NextDayPickMetrics
         return tags;
     }
 
+    /// <summary>
+    /// 合并启发式与 AI 标签：命中清空；未中时保留 OHLC/强弱类标签，AI 可补充，
+    /// 若已有具体标签则去掉单独的 CorrectThesisWrongTiming。
+    /// </summary>
+    public static IReadOnlyList<string> MergeFailureTags(
+        bool directionHit,
+        IEnumerable<string>? inferred,
+        IEnumerable<string>? fromAi = null)
+    {
+        if (directionHit) return Array.Empty<string>();
+
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in inferred ?? Array.Empty<string>())
+            if (!string.IsNullOrWhiteSpace(t)) set.Add(t.Trim());
+        foreach (var t in fromAi ?? Array.Empty<string>())
+            if (!string.IsNullOrWhiteSpace(t)) set.Add(t.Trim());
+
+        if (set.Count == 0) return Array.Empty<string>();
+
+        var concrete = set
+            .Where(t => !t.Equals(TagCorrectThesisWrongTiming, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (concrete.Count > 0)
+            return concrete;
+
+        return new[] { TagCorrectThesisWrongTiming };
+    }
+
     private static bool indexDragged(decimal stockRet, decimal? rs)
         => stockRet < 0 && rs is > 0m; // 个股跌但强于指数 → 大盘拖累为主
 }

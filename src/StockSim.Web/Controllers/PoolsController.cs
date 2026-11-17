@@ -5,6 +5,7 @@ using StockSim.Application.Services;
 using StockSim.Application.Services.Alerts;
 using StockSim.Domain.Enums;
 using StockSim.Domain.MarketData;
+using StockSim.Web.Models;
 
 namespace StockSim.Web.Controllers;
 
@@ -79,21 +80,37 @@ public class PoolsController : Controller
     }
 
     /// <summary>个股详情面板（同花顺风格摘要：日K/分时/资金/估值 + 策略运行状态）。</summary>
-    public async Task<IActionResult> Stock(string symbol, Guid? poolId, CancellationToken ct)
+    public async Task<IActionResult> Stock(
+        string symbol,
+        Guid? poolId,
+        int reviewsPage = 1,
+        int forecastPage = 1,
+        int pageSize = 10,
+        CancellationToken ct = default)
     {
         var page = await _stockDetails.GetStockDetailPageAsync(symbol, poolId, null, ct);
         if (page is null) return NotFound();
         ViewData["Title"] = $"{page.Bundle.Board.Name}({page.Bundle.Board.Symbol})";
+        ViewBag.ReviewsPage = PagedResult<DailyTReviewDto>.From(
+            page.DailyTReviews ?? Array.Empty<DailyTReviewDto>(), reviewsPage, pageSize, "reviewsPage");
+        ViewBag.ForecastPage = PagedResult<PriceRangeForecastDto>.From(
+            page.ForecastHistory ?? Array.Empty<PriceRangeForecastDto>(), forecastPage, pageSize, "forecastPage");
         return View(page);
     }
 
     /// <summary>个股操作记录（成交/拒单）与持仓盈亏。</summary>
-    public async Task<IActionResult> Operations(string symbol, Guid? poolId, CancellationToken ct)
+    public async Task<IActionResult> Operations(
+        string symbol,
+        Guid? poolId,
+        int page = 1,
+        int pageSize = 20,
+        CancellationToken ct = default)
     {
-        var page = await _stockDetails.GetStockOperationsAsync(symbol, poolId, ct);
-        if (page is null) return NotFound();
-        ViewData["Title"] = $"{page.Name} 操作明细";
-        return View(page);
+        var data = await _stockDetails.GetStockOperationsAsync(symbol, poolId, ct);
+        if (data is null) return NotFound();
+        ViewData["Title"] = $"{data.Name} 操作明细";
+        ViewBag.OpsPage = PagedResult<StockOperationRowDto>.From(data.Operations, page, pageSize);
+        return View(data);
     }
 
     /// <summary>日K点击下钻：返回指定交易日分时/分钟K JSON。</summary>

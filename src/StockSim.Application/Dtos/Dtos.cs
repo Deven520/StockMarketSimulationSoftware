@@ -341,7 +341,9 @@ public record AiSuggestionDto(
     string PayloadJson,
     bool IsAccepted,
     DateTime? ReviewedAt,
-    string? SelectionLogic = null);
+    string? SelectionLogic = null,
+    bool IsHardRejected = false,
+    string? FilterRejectReason = null);
 
 public record AiJobDetailDto(
     Guid Id,
@@ -450,8 +452,31 @@ public record GoalProgressDailyDto(
     int DayIndex,
     string? Notes);
 
+public record NextDayTagCountDto(string Tag, int Count);
+
+public record NextDayThemeHitDto(string Theme, int SampleSize, decimal DirectionHitRatePct);
+
+public record NextDayCalibrationSummaryDto(
+    int WindowDays,
+    int SampleSize,
+    decimal? DirectionHitRatePct,
+    IReadOnlyList<NextDayTagCountDto> TopFailureTags,
+    IReadOnlyList<NextDayThemeHitDto> ThemeHitRates,
+    IReadOnlyList<string> WeakThemes,
+    decimal ConfidenceFloor,
+    decimal IndexWeakDayThresholdPct,
+    decimal WeakMarketMinRs5dPct,
+    bool BlockHighOpenChase,
+    int MaxSameThemePerBatch = 2,
+    int MaxPicksPerBatch = 5,
+    bool PreferAbsoluteDirection = false,
+    decimal? MarketDragMissPct = null,
+    int MissSampleSize = 0,
+    int MissButBeatIndexCount = 0);
+
 public record InvestmentGoalDetailDto(
     InvestmentGoalDto Goal,
     IReadOnlyList<InvestmentGoalStockDto> Stocks,
     IReadOnlyList<GoalProgressDailyDto> Progress,
-    IReadOnlyList<NextDayPickReviewDto>? NextDayPickReviews = null);
+    IReadOnlyList<NextDayPickReviewDto>? NextDayPickReviews = null,
+    NextDayCalibrationSummaryDto? NextDayCalibration = null);

@@ -43,6 +43,10 @@
     </div>
 </div>
 
+@{
+    var opsPage = ViewBag.OpsPage as StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.StockOperationRowDto>
+                  ?? StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.StockOperationRowDto>.From(Model.Operations, 1, 20);
+}
 <div class="table-responsive">
 <table class="table table-sm table-hover align-middle">
     <thead class="table-light">
@@ -58,13 +62,13 @@
         </tr>
     </thead>
     <tbody>
-    @if (Model.Operations.Count == 0)
+    @if (opsPage.TotalCount == 0)
     {
         <tr><td colspan="8" class="text-muted text-center py-4">暂无操作记录（开市后策略会自动做 T）</td></tr>
     }
     else
     {
-        foreach (var o in Model.Operations)
+        foreach (var o in opsPage.Items)
         {
             var buy = o.Side == "买入";
             <tr>
@@ -82,3 +86,4 @@
     </tbody>
 </table>
 </div>
+<partial name="_Pager" model="PagerModel.From(opsPage)" />

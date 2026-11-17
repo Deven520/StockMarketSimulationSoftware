@@ -43,13 +43,13 @@ public static class PathPlaybookResolver
                 SizeScale = 0.85m,
                 Label = "HighOpenHighGo"
             },
-            // 倒T：买入偏紧防阴跌加仓；卖出略松 + 启用回撤卖，避免 BoughtLow 空等高抛
+            // 倒T：优先动量低吸；Idle 高抛阈值抬高，减少「卖飞+停机」残腿
             IntradayPathRegime.LowOpenHighGo => new Playbook
             {
                 Style = "momentum_t",
                 AllowBreakAvoid = false,
                 PullbackSellPct = Math.Max(0.55m, pullback * 0.75m),
-                SellThresholdScale = 0.95m,
+                SellThresholdScale = 1.15m,
                 BuyThresholdScale = 0.9m,
                 SizeScale = 1m,
                 Label = "LowOpenHighGo"

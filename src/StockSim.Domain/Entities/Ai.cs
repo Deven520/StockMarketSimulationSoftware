@@ -34,6 +34,10 @@ public class AiSuggestion : EntityBase
     public string? SelectionLogic { get; set; }
     public string? Risk { get; set; }
     public bool IsAccepted { get; set; }
+    /// <summary>次日预涨硬过滤未通过（选股预检/入库）。</summary>
+    public bool IsHardRejected { get; set; }
+    /// <summary>硬过滤拒绝原因（供 UI 灰显）。</summary>
+    public string? FilterRejectReason { get; set; }
     public DateTime? ReviewedAt { get; set; }
     public string? ReviewedBy { get; set; }
 }

@@ -1,5 +1,8 @@
-@model IReadOnlyList<StockSim.Application.Dtos.TradeDto>
+@model StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.TradeDto>
 @using StockSim.Domain.Enums
+@{
+    var symbol = ViewBag.Symbol as string;
+}
 <h2>成交明细</h2>
 @if (TempData["Msg"] is string msg)
 {
@@ -17,10 +20,14 @@
     <div class="col-auto"><input name="price" type="number" step="0.01" class="form-control" placeholder="价格" required /></div>
     <div class="col-auto"><button class="btn btn-primary">手工模拟下单</button></div>
 </form>
+<form method="get" class="row g-2 mb-2">
+    <div class="col-auto"><input name="symbol" value="@symbol" class="form-control form-control-sm" placeholder="按代码筛选" /></div>
+    <div class="col-auto"><button class="btn btn-sm btn-outline-secondary">筛选</button></div>
+</form>
 <table class="table table-sm table-striped">
     <thead><tr><th>时间</th><th>日期</th><th>代码</th><th>名称</th><th>方向</th><th>数量</th><th>价格</th><th>金额</th><th>费用</th><th></th></tr></thead>
     <tbody>
-    @foreach (var t in Model)
+    @foreach (var t in Model.Items)
     {
         <tr>
             <td>@t.TradedAt.ToLocalTime().ToString("HH:mm:ss")</td>
@@ -41,5 +48,10 @@
             </td>
         </tr>
     }
+    @if (Model.Items.Count == 0)
+    {
+        <tr><td colspan="10" class="text-muted text-center py-3">暂无成交</td></tr>
+    }
     </tbody>
 </table>
+<partial name="_Pager" model="PagerModel.From(Model)" />

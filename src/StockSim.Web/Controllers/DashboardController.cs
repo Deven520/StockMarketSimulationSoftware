@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
+using StockSim.Application.Dtos;
 using StockSim.Application.Services;
+using StockSim.Web.Models;
 
 namespace StockSim.Web.Controllers;
 
@@ -9,12 +11,12 @@ public class DashboardController : Controller
 
     public DashboardController(PnLAppService pnl) => _pnl = pnl;
 
-    public async Task<IActionResult> Index(CancellationToken ct)
+    public async Task<IActionResult> Index(int page = 1, int pageSize = 20, CancellationToken ct = default)
     {
         ViewData["Title"] = "监控总览";
         var dto = await _pnl.GetDashboardAsync(ct);
         var history = await _pnl.QueryAsync(DateTime.Today.AddDays(-30), DateTime.Today, ct);
-        ViewBag.History = history;
+        ViewBag.History = PagedResult<DailyPnLDto>.From(history, page, pageSize);
         return View(dto);
     }
 

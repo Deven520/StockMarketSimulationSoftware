@@ -1,4 +1,4 @@
-@model IReadOnlyList<StockSim.Application.Dtos.AiJobDto>
+@model StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.AiJobDto>
 @using StockSim.Domain.Enums
 @using StockSim.Application.Services
 @using StockSim.Application.Dtos
@@ -155,7 +155,7 @@
         </tr>
     </thead>
     <tbody>
-    @foreach (var j in Model.Where(x => x.JobType == AiJobType.StockPick))
+    @foreach (var j in Model.Items)
     {
         <tr>
             <td class="text-nowrap">@j.CreationTime.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
@@ -176,5 +176,10 @@
             </td>
         </tr>
     }
+    @if (Model.Items.Count == 0)
+    {
+        <tr><td colspan="6" class="text-muted text-center py-3">暂无选股任务</td></tr>
+    }
     </tbody>
 </table>
+<partial name="_Pager" model="PagerModel.From(Model)" />

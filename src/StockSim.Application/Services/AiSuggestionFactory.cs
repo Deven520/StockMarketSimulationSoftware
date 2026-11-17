@@ -36,7 +36,9 @@ public static class AiSuggestionFactory
         s.PayloadJson,
         s.IsAccepted,
         s.ReviewedAt,
-        s.SelectionLogic);
+        s.SelectionLogic,
+        s.IsHardRejected,
+        s.FilterRejectReason);
 
     private static string? FirstString(JsonElement item, params string[] names)
     {

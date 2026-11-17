@@ -55,4 +55,25 @@ public class NextDayPickMetricsTests
         var tags = NextDayPickMetrics.InferFailureTags(false, -1m, relativeStrengthPct: 0.5m);
         Assert.Contains(NextDayPickMetrics.TagMarketDrag, tags);
     }
+
+    [Fact]
+    public void MergeFailureTags_Clears_On_Hit_And_Drops_Lone_WrongTiming()
+    {
+        Assert.Empty(NextDayPickMetrics.MergeFailureTags(
+            true, new[] { NextDayPickMetrics.TagChaseHigh }, new[] { "x" }));
+
+        var merged = NextDayPickMetrics.MergeFailureTags(
+            false,
+            new[] { NextDayPickMetrics.TagChaseHigh, NextDayPickMetrics.TagCorrectThesisWrongTiming },
+            new[] { NextDayPickMetrics.TagMarketDrag });
+        Assert.Contains(NextDayPickMetrics.TagChaseHigh, merged);
+        Assert.Contains(NextDayPickMetrics.TagMarketDrag, merged);
+        Assert.DoesNotContain(NextDayPickMetrics.TagCorrectThesisWrongTiming, merged);
+
+        var onlyTiming = NextDayPickMetrics.MergeFailureTags(
+            false,
+            new[] { NextDayPickMetrics.TagCorrectThesisWrongTiming },
+            null);
+        Assert.Equal(new[] { NextDayPickMetrics.TagCorrectThesisWrongTiming }, onlyTiming);
+    }
 }

@@ -1,4 +1,4 @@
-@model IReadOnlyList<StockSim.Application.Dtos.StrategyDto>
+@model StockSim.Web.Models.PagedResult<StockSim.Application.Dtos.StrategyDto>
 @{
     var pools = (IReadOnlyList<StockSim.Application.Dtos.StockPoolDto>)ViewBag.Pools;
 }
@@ -12,7 +12,7 @@
     <div class="col-auto"><input name="description" class="form-control" placeholder="描述" /></div>
     <div class="col-auto"><button class="btn btn-primary">新建</button></div>
 </form>
-@foreach (var s in Model)
+@foreach (var s in Model.Items)
 {
     <div class="card mb-3 shadow-sm">
         <div class="card-body">
@@ -54,3 +54,8 @@
         </div>
     </div>
 }
+@if (Model.Items.Count == 0)
+{
+    <p class="text-muted">暂无策略</p>
+}
+<partial name="_Pager" model="PagerModel.From(Model)" />

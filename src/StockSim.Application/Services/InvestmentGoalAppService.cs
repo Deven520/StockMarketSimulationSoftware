@@ -115,6 +115,9 @@ public class InvestmentGoalAppService
         var pickReviews = g.TradeStyle == StockTradeStyle.NextDayRise
             ? await _nextDayPickReviews.ListForGoalAsync(id, 30, ct)
             : null;
+        NextDayCalibrationSummaryDto? calibration = null;
+        if (g.TradeStyle == StockTradeStyle.NextDayRise)
+            calibration = await _nextDayPickFilter.GetCalibrationSummaryAsync(ct);
         decimal? avgRs = null;
         if (pickReviews is { Count: > 0 })
         {
@@ -145,7 +148,8 @@ public class InvestmentGoalAppService
             progress.Select(p => new GoalProgressDailyDto(
                 p.TradeDate, p.PortfolioReturnPct, p.AchievementRate,
                 p.TotalMarketValue, p.TotalBaseline, p.RealizedPnL, p.UnrealizedPnL, p.DayIndex, p.Notes)).ToList(),
-            pickReviews);
+            pickReviews,
+            calibration);
     }
 
     /// <summary>
@@ -189,10 +193,13 @@ public class InvestmentGoalAppService
         var marketContext = await BuildMarketContextAsync(tradeStyle, nextTradeDay, ct);
         object? recentPickReviews = null;
         object? pickCalibration = null;
+        string? themeWarning = null;
         if (tradeStyle == StockTradeStyle.NextDayRise)
         {
             recentPickReviews = await _nextDayPickReviews.LoadRecentReviewsForPromptAsync(15, ct);
             pickCalibration = await _nextDayPickFilter.LoadCalibrationForPromptAsync(ct);
+            var themeClass = NextDayPickGuard.ClassifyTheme(goal.ThemePreference);
+            themeWarning = NextDayPickGuard.ThemeClassHint(themeClass);
         }
 
         var correlationId = Guid.NewGuid();
@@ -204,6 +211,10 @@ public class InvestmentGoalAppService
                 : null,
             horizonDays = goal.HorizonDays,
             themePreference = goal.ThemePreference,
+            themeClass = tradeStyle == StockTradeStyle.NextDayRise
+                ? NextDayPickGuard.ClassifyTheme(goal.ThemePreference).ToString()
+                : null,
+            themeWarning,
             tradeStyle = tradeStyle.ToString(),
             tradeStyleLabel = styleLabel,
             nextTradingDay = nextTradeDay.ToString("yyyy-MM-dd"),
@@ -376,11 +387,13 @@ public class InvestmentGoalAppService
                 try
                 {
                     var all = await _db.AiSuggestions.Where(s => s.AiJobId == job.Id).ToListAsync(ct);
-                    var (_, notes) = await _nextDayPickFilter.FilterSuggestionsAsync(
+                    var (accepted, notes) = await _nextDayPickFilter.FilterSuggestionsAsync(
                         goal, all, strict: false, ct: ct);
+                    // 写回 IsHardRejected，UI 灰显不可勾选；Accepted 仅作摘要
                     if (notes.Count > 0)
                         job.AnalysisSummary = (job.AnalysisSummary ?? "") +
-                                              $"\n【硬过滤预检，入库时生效】{string.Join("；", notes.Take(6))}";
+                                              $"\n【硬过滤预检】通过 {accepted.Count}/{all.Count}；" +
+                                              string.Join("；", notes.Take(6));
                 }
                 catch (Exception ex)
                 {
@@ -404,10 +417,11 @@ public class InvestmentGoalAppService
         }
     }
 
-    /// <summary>用户勾选建议股：入库并激活目标。</summary>
+    /// <summary>用户勾选建议股：入库并激活目标。force=true 才可绕过次日硬过滤。</summary>
     public async Task<(bool Ok, string Message)> AcceptSuggestionsAsync(
         Guid goalId,
         IReadOnlyList<Guid> suggestionIds,
+        bool force = false,
         CancellationToken ct = default)
     {
         var goal = await _db.InvestmentGoals.FirstOrDefaultAsync(g => g.Id == goalId, ct);
@@ -425,19 +439,37 @@ public class InvestmentGoalAppService
         IReadOnlyList<string> rejectNotes = Array.Empty<string>();
         if (goal.TradeStyle == StockTradeStyle.NextDayRise)
         {
-            // 入库用「路径/追高」过滤；confidence 文本已兼容 medium 等，避免误杀
             var filtered = await _nextDayPickFilter.FilterSuggestionsAsync(
                 goal, suggestions, strict: true, ct: ct);
             toAccept = filtered.Accepted;
             rejectNotes = filtered.RejectNotes;
             if (toAccept.Count == 0)
             {
-                // 仍允许用户强行入库：回退为原勾选，但提示风险
+                if (!force)
+                {
+                    return (false,
+                        "硬过滤未通过，未入库。" +
+                        (rejectNotes.Count > 0 ? string.Join("；", rejectNotes.Take(5)) : "") +
+                        "。若坚持入库请勾选「强制入库」。");
+                }
+
                 toAccept = suggestions;
                 rejectNotes = rejectNotes.Concat(new[]
                 {
-                    "硬过滤未通过，已按你的勾选强制入库，请自行甄别风险"
+                    "已按勾选强制入库（忽略硬过滤），请自行甄别风险"
                 }).ToList();
+            }
+            else if (!force)
+            {
+                // 仅接受通过硬过滤的勾选项
+                toAccept = filtered.Accepted;
+            }
+            else
+            {
+                // force：勾选中未通过的也放行
+                toAccept = suggestions;
+                if (rejectNotes.Count > 0)
+                    rejectNotes = rejectNotes.Concat(new[] { "强制入库已包含未过硬过滤标的" }).ToList();
             }
         }
 
@@ -463,10 +495,11 @@ public class InvestmentGoalAppService
                 x => x.InvestmentGoalId == goalId && x.Symbol == item.Symbol, ct);
             if (!exists)
             {
-                var quote = await _quotes.GetQuoteAsync(item.Symbol, item.Name, ct);
                 var targetDay = goal.TradeStyle == StockTradeStyle.NextDayRise
                     ? (item.PredictedRiseDate ?? PriceForecastMetrics.NextTradingDay(DateTime.Today))
                     : (DateTime?)null;
+                // 基准价：入库时用报价占位；对账时统一覆盖为「目标日前一交易日收盘」
+                var quote = await _quotes.GetQuoteAsync(item.Symbol, item.Name, ct);
                 _db.InvestmentGoalStocks.Add(new InvestmentGoalStock
                 {
                     InvestmentGoalId = goalId,
@@ -481,6 +514,8 @@ public class InvestmentGoalAppService
             }
 
             s.IsAccepted = true;
+            s.IsHardRejected = false;
+            s.FilterRejectReason = null;
             s.ReviewedAt = DateTime.UtcNow;
             added++;
         }
@@ -554,8 +589,6 @@ public class InvestmentGoalAppService
                 && gs.ActualClose.HasValue
                 && gs.NextDayReturnPct.HasValue)
                 continue;
-            if (gs.BaselinePrice is null or <= 0)
-                continue;
 
             StockDetailBundle? detail;
             try
@@ -569,11 +602,20 @@ public class InvestmentGoalAppService
             }
 
             if (detail is null || detail.IsSimulated) continue;
-            var bar = detail.DailyBars.FirstOrDefault(d => d.Date.Date == target);
+            var bars = detail.DailyBars
+                .Where(d => d.Date.Date <= target && d.Close > 0)
+                .OrderBy(d => d.Date)
+                .ToList();
+            var bar = bars.LastOrDefault(d => d.Date.Date == target);
             if (bar is null || bar.Close <= 0) continue;
 
+            // 与池结算统一：基准价 = 目标日前一交易日收盘
+            var baseline = bars.LastOrDefault(d => d.Date.Date < target)?.Close ?? 0m;
+            if (baseline <= 0) continue;
+
             var (ret, dirHit, tgtHit) = NextDayPickMetrics.Evaluate(
-                gs.BaselinePrice.Value, bar.Close, goal.ExpectedReturnPct);
+                baseline, bar.Close, goal.ExpectedReturnPct);
+            gs.BaselinePrice = baseline;
             gs.ActualClose = bar.Close;
             gs.NextDayReturnPct = ret;
             gs.DirectionHit = dirHit;
@@ -852,16 +894,24 @@ public class InvestmentGoalAppService
 
         if (goal.TradeStyle == StockTradeStyle.NextDayRise)
         {
+            var themeCls = NextDayPickGuard.ClassifyTheme(goal.ThemePreference);
             parts.Add(
                 "【选股类型】次日上涨预选：综合当日行情与量能、近史强弱、题材偏好、近期新闻与热点，" +
                 "预选下一交易日更可能上涨的具体 A 股；不做日内高频做T；" +
                 $"隔日温和目标约 {goal.ExpectedReturnPct}%（已钳制≤{NextDayPickGuard.MaxExpectedReturnPct}%）；" +
                 "主 KPI 是方向命中与相对创业板指超额，不是冲涨停。");
             parts.Add(
-                "【复盘约束】须消化 recentNextDayPickReviews 与 nextDayPickCalibration；" +
-                "避免 ChaseHigh/WeakRelative/ThemeFade/GapDownOpen；同行业建议≤2 只；" +
+                "【复盘约束·强制】必须吸收 nextDayPickCalibration 中的 weakThemesMustDownweight、" +
+                "pickHintDigest、topFailureTags、narrativeThemeRule、marketDragRule、weakMarketGate 与 thresholds；" +
+                "禁止以「重大利好」类空叙事作为唯一催化；避免 ChaseHigh/WeakRelative/ThemeFade/GapDownOpen/MarketDrag；" +
+                "同行业≤thresholds.maxSameThemePerBatch；指数近1日≤弱市阈时：宁缺毋滥、缩至≤3 只、抬 confidence，" +
+                "须同时追求绝对收涨与相对创业板指不弱，禁止硬凑满仓。" +
+                (themeCls != NextDayThemeClass.Ok
+                    ? " " + (NextDayPickGuard.ThemeClassHint(themeCls) ?? "")
+                    : ""));
+            parts.Add(
                 "items 必须含 symbol,name,reason,risk，并尽量含 thesis,catalystType,confidence(0-1),invalidation；" +
-                "即使把握一般也须输出 3～5 只具体代码，禁止只写分析不给 items。");
+                "弱市日可少于 3 只但禁止空 items；非弱市输出 3～5 只具体代码，禁止只写分析不给 items。");
         }
         else if (goal.TradeStyle == StockTradeStyle.TrendSwing)
         {
@@ -891,9 +941,10 @@ public class InvestmentGoalAppService
             return
                 $"请推荐 3~5 只下一交易日更可能上涨的具体 A 股（必须含 6 位代码与简称）。" +
                 $"题材偏好「{goal.ThemePreference}」；隔日温和目标约 {goal.ExpectedReturnPct}%（≤{NextDayPickGuard.MaxExpectedReturnPct}%）；" +
-                "主目标：收涨且相对创业板指不弱；请消化 recentNextDayPickReviews 与 nextDayPickCalibration；" +
-                "排除 ST、明显追高与极弱相对强弱；同行业建议不超过 2 只；" +
-                "必须输出 3～5 只具体代码（禁止空 items）；字段含 symbol,name,reason,risk，并尽量含 thesis,catalystType,confidence,invalidation；" +
+                "主目标：绝对收涨且相对创业板指不弱；必须消化 nextDayPickCalibration（弱题材/pickHints/错因 Top/弱市闸门/阈值）与 recentNextDayPickReviews；" +
+                "禁止纯「重大利好」叙事催化；排除 ST、明显追高与极弱相对强弱；同行业≤阈值；" +
+                "指数弱日宁缺毋滥（可少于3只但禁止空 items）；非弱市输出 3～5 只；" +
+                "字段含 symbol,name,reason,risk，并尽量含 thesis,catalystType,confidence,invalidation；" +
                 "返回 JSON：analysis、items[{symbol,name,reason,risk,thesis,catalystType,confidence,invalidation}]。";
         }
 
@@ -926,8 +977,9 @@ public class InvestmentGoalAppService
                 nextTradingDay = nextTradingDay.ToString("yyyy-MM-dd"),
                 guidance =
                     "请结合热点新闻、题材、强弱，以及 recentNextDayPickReviews / nextDayPickCalibration：" +
-                    "主 KPI=方向命中+相对强弱；预期涨幅已钳制为温和隔日目标；" +
-                    "须消化错因周统计、弱题材列表与 pickHints；勿重复 ChaseHigh/WeakRelative/ThemeFade/GapDownOpen。",
+                    "主 KPI=绝对方向命中+相对强弱；预期涨幅已钳制为温和隔日目标；" +
+                    "须强制吸收 weakThemesMustDownweight、pickHintDigest、topFailureTags、narrativeThemeRule、weakMarketGate、marketDragRule；" +
+                    "指数弱日缩批次、抬置信、勿硬凑；勿重复 ChaseHigh/WeakRelative/ThemeFade/GapDownOpen/MarketDrag；禁止纯重大利好空叙事。",
                 hotNews = news.Select(n => new
                 {
                     title = n.Title,

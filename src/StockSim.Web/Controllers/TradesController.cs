@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using StockSim.Application.Dtos;
 using StockSim.Application.Services;
 using StockSim.Domain.Enums;
+using StockSim.Web.Models;
 
 namespace StockSim.Web.Controllers;
 
@@ -16,18 +17,21 @@ public class TradesController : Controller
         _pnl = pnl;
     }
 
-    public async Task<IActionResult> Index(string? symbol, CancellationToken ct)
+    public async Task<IActionResult> Index(string? symbol, int page = 1, int pageSize = 20, CancellationToken ct = default)
     {
         ViewData["Title"] = "成交明细";
+        ViewBag.Symbol = symbol;
         await _trading.GetOrCreateDefaultAccountAsync(ct);
-        return View(await _trading.GetTradesAsync(null, null, symbol, ct));
+        var all = await _trading.GetTradesAsync(null, null, symbol, ct);
+        return View(PagedResult<TradeDto>.From(all, page, pageSize));
     }
 
-    public async Task<IActionResult> Positions(CancellationToken ct)
+    public async Task<IActionResult> Positions(int page = 1, int pageSize = 20, CancellationToken ct = default)
     {
         ViewData["Title"] = "持仓";
         await _trading.GetOrCreateDefaultAccountAsync(ct);
-        return View(await _trading.GetPositionsAsync(ct));
+        var all = await _trading.GetPositionsAsync(ct);
+        return View(PagedResult<PositionDto>.From(all, page, pageSize));
     }
 
     [HttpPost]
@@ -38,10 +42,11 @@ public class TradesController : Controller
         return RedirectToAction(nameof(Index));
     }
 
-    public async Task<IActionResult> PnL(CancellationToken ct)
+    public async Task<IActionResult> PnL(int page = 1, int pageSize = 20, CancellationToken ct = default)
     {
         ViewData["Title"] = "盈亏分析";
-        return View(await _pnl.QueryAsync(DateTime.Today.AddDays(-90), DateTime.Today, ct));
+        var all = await _pnl.QueryAsync(DateTime.Today.AddDays(-90), DateTime.Today, ct);
+        return View(PagedResult<DailyPnLDto>.From(all, page, pageSize));
     }
 
     [HttpPost]
