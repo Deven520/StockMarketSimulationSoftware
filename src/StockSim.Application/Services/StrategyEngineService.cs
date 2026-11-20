@@ -175,10 +175,10 @@ public class StrategyEngineService
                 var anchor = _sessionTracker.ResolveAnchor(effective.Anchor, snap);
                 if (anchor <= 0) anchor = quote.LastPrice;
                 var deviation = (quote.LastPrice - anchor) / anchor * 100m;
-                var tradesToday = await TodayTradeCount(account.Id, symbol, ct);
+                var roundTripsToday = await TodayCompletedRoundTripsAsync(account.Id, symbol, ct);
 
-                // 刷新当日已实现（简化：今日该股卖出盈亏近似）
-                runtime.DayRealizedPnL = await ApproxDayRealizedAsync(account.Id, symbol, position?.AvgCost ?? 0, ct);
+                // 日亏停机用 T 配对净利（毛利−费），与复盘 CyclePnl 口径一致，避免成本法假停机
+                runtime.DayRealizedPnL = await ApproxDayCycleNetAsync(account.Id, symbol, ct);
 
                 var heldQty = position?.Quantity ?? 0;
                 var baseQty = position?.BaseQuantity > 0 ? position.BaseQuantity : heldQty;
@@ -199,7 +199,7 @@ public class StrategyEngineService
                     Now = now,
                     StrategyDefinitionId = strategy.Id,
                     StockPoolId = binding.StockPoolId ?? poolItem?.StockPoolId,
-                    TradesToday = tradesToday,
+                    TradesToday = roundTripsToday,
                     AvailableCash = poolItem?.AvailableCash ?? account.Cash,
                     CanDoT = canDoT,
                     NeedsBaseBuild = needsBaseBuild,
@@ -227,8 +227,15 @@ public class StrategyEngineService
                 }
 
                 decimal? cashBudget = poolItem?.AvailableCash;
+                // 关 OpenT / ForceFlat 超配减仓 / 建底仓：不占往返上限
+                var bypassMaxTrades = signal.IsBaseBuild
+                    || !signal.CountsTowardOpenT
+                    || (signal.Action == SignalAction.Buy && runtime.OpenTQty >= 100);
+                var tradesForLimit = bypassMaxTrades ? 0 : roundTripsToday;
+                int? maxTrades = bypassMaxTrades ? null : effective.MaxTradesPerDay;
+
                 var risk = _riskChecker.Validate(
-                    signal, account, position, quote, tradesToday, cashBudget);
+                    signal, account, position, quote, tradesForLimit, cashBudget);
                 if (!risk.IsAllowed)
                 {
                     _db.Orders.Add(new Order
@@ -256,8 +263,8 @@ public class StrategyEngineService
                     signal,
                     DateTime.Today,
                     isManual: false,
-                    effective.MaxTradesPerDay,
-                    tradesToday,
+                    maxTrades,
+                    tradesForLimit,
                     cashBudget,
                     onCashBudgetChanged: poolItem is null
                         ? null
@@ -389,7 +396,6 @@ public class StrategyEngineService
             var qty = AlignLot((int)Math.Floor(remainBudget / price));
             if (qty < 100) continue;
 
-            var tradesToday = await TodayTradeCount(account.Id, item.Symbol, ct);
             var signal = new TradeSignal
             {
                 Symbol = item.Symbol,
@@ -403,7 +409,7 @@ public class StrategyEngineService
             };
 
             var cashBudget = item.AvailableCash;
-            var risk = _riskChecker.Validate(signal, account, position, quote, tradesToday, cashBudget);
+            var risk = _riskChecker.Validate(signal, account, position, quote, tradesToday: 0, cashBudget);
             if (!risk.IsAllowed)
             {
                 _db.Orders.Add(new Order
@@ -431,7 +437,7 @@ public class StrategyEngineService
                 DateTime.Today,
                 isManual: false,
                 maxTradesPerDay: null,
-                tradesToday,
+                tradesToday: 0,
                 cashBudget,
                 onCashBudgetChanged: newCash => { item.AvailableCash = newCash; });
 
@@ -639,26 +645,32 @@ public class StrategyEngineService
         await Task.CompletedTask;
     }
 
-    private async Task<decimal> ApproxDayRealizedAsync(Guid accountId, string symbol, decimal avgCost, CancellationToken ct)
+    private async Task<List<TCyclePnlEstimator.Leg>> LoadTodayLegsAsync(
+        Guid accountId, string symbol, CancellationToken ct)
     {
         var trades = await _db.Trades
             .Where(t => t.SimAccountId == accountId && t.Symbol == symbol && t.TradeDate == DateTime.Today)
+            .OrderBy(t => t.TradedAt)
+            .ThenBy(t => t.Id)
+            .Select(t => new { t.Side, t.Price, t.Quantity, t.TotalFee })
             .ToListAsync(ct);
-        decimal pnl = 0;
-        foreach (var t in trades)
-        {
-            if (t.Side == OrderSide.Sell)
-                pnl += (t.Price - avgCost) * t.Quantity - t.TotalFee;
-            else
-                pnl -= t.TotalFee;
-        }
 
-        return pnl;
+        return trades
+            .Select(t => new TCyclePnlEstimator.Leg(t.Side, t.Price, t.Quantity, t.TotalFee))
+            .ToList();
     }
 
-    private Task<int> TodayTradeCount(Guid accountId, string symbol, CancellationToken ct) =>
-        _db.Trades.CountAsync(
-            t => t.SimAccountId == accountId && t.TradeDate == DateTime.Today && t.Symbol == symbol, ct);
+    private async Task<decimal> ApproxDayCycleNetAsync(Guid accountId, string symbol, CancellationToken ct)
+    {
+        var legs = await LoadTodayLegsAsync(accountId, symbol, ct);
+        return TCyclePnlEstimator.CycleNet(legs);
+    }
+
+    private async Task<int> TodayCompletedRoundTripsAsync(Guid accountId, string symbol, CancellationToken ct)
+    {
+        var legs = await LoadTodayLegsAsync(accountId, symbol, ct);
+        return TCyclePnlEstimator.CompletedRoundTrips(legs);
+    }
 
     /// <summary>null AllowTFromDate = 旧数据，有底仓即可做 T；否则需到起始日。</summary>
     private static bool IsAllowTDay(StockPoolItem? item, DateTime now)

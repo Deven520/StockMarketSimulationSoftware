@@ -220,15 +220,24 @@ public sealed class DailyTReviewAppService
         await _db.SaveChangesAsync(ct);
 
         var detail = await _detailProvider.GetDetailAsync(item.Symbol, item.Name, ct);
-        if (detail is null || detail.IsSimulated)
+        if (detail is null)
         {
             review.Status = DailyTReviewStatus.Skipped;
-            review.Notes = detail is null ? "无行情详情，跳过" : "模拟/回退行情，跳过 AI 复盘";
+            review.Notes = "无行情详情，跳过";
             review.Summary = review.Notes;
             review.CompletedAt = DateTime.Now;
             await _db.SaveChangesAsync(ct);
             queueItem.OutputPayload = review.Notes;
             return;
+        }
+
+        // 模拟/回退行情仍做 AI 复盘：主依据成交与决策日志，避免夜更完全无 hints
+        if (detail.IsSimulated)
+        {
+            review.Notes = "行情详情为模拟/回退，复盘主依据成交与决策日志";
+            _logger.LogWarning(
+                "DailyTReview {Symbol} {Date}: detail IsSimulated, continue with trade/decision context",
+                item.Symbol, day);
         }
 
         var (prompt, inputPayload, metrics) = await BuildPromptAndContextAsync(item, day, detail, ct);
@@ -482,6 +491,7 @@ public sealed class DailyTReviewAppService
             symbol = item.Symbol,
             name = item.Name,
             tradeDate = day.ToString("yyyy-MM-dd"),
+            marketDataSimulated = detail.IsSimulated,
             ohlc,
             trades = tradeRows,
             cyclePnlApprox = cyclePnl,
@@ -635,20 +645,10 @@ public sealed class DailyTReviewAppService
     /// <summary>按时间序粗配对：Sell 后找下一笔 Buy，价差×股数累加。</summary>
     private static decimal EstimateCyclePnl(IReadOnlyList<Trade> trades)
     {
-        decimal sum = 0;
-        for (var i = 0; i < trades.Count; i++)
-        {
-            if (trades[i].Side != OrderSide.Sell) continue;
-            for (var j = i + 1; j < trades.Count; j++)
-            {
-                if (trades[j].Side != OrderSide.Buy) continue;
-                var qty = Math.Min(trades[i].Quantity, trades[j].Quantity);
-                sum += (trades[i].Price - trades[j].Price) * qty;
-                break;
-            }
-        }
-
-        return Math.Round(sum, 2);
+        var legs = trades
+            .Select(t => new TCyclePnlEstimator.Leg(t.Side, t.Price, t.Quantity, t.TotalFee))
+            .ToList();
+        return TCyclePnlEstimator.Analyze(legs).CycleGross;
     }
 
     private static string Truncate(string s, int max) =>

@@ -133,6 +133,7 @@ public sealed class StrategyParameters
             DayLossStopPct = Risk.DayLossStopPct,
             SymbolPauseOnConsecutiveLosses = Risk.SymbolPauseOnConsecutiveLosses,
             BlockNearLimitPct = Risk.BlockNearLimitPct,
+            MinRoundTripEdgeBps = Risk.MinRoundTripEdgeBps,
             UseVolumeConfirm = Factors.UseVolumeConfirm,
             MinVolumeRatio = Factors.MinVolumeRatio,
             Anchor = Triggers.Anchor,
@@ -224,8 +225,9 @@ public sealed class SizingPolicy
     [JsonPropertyName("positionPctPerTrade")]
     public ParamRange PositionPctPerTrade { get; set; } = new() { Base = 0.2m, Min = 0.1m, Max = 0.35m };
 
+    /// <summary>单日完整往返（卖腿被买回关闭）上限，非单边成交笔数。</summary>
     [JsonPropertyName("maxTradesPerDay")]
-    public int MaxTradesPerDay { get; set; } = 6;
+    public int MaxTradesPerDay { get; set; } = 8;
 
     [JsonPropertyName("maxIntradayExposurePct")]
     public decimal MaxIntradayExposurePct { get; set; } = 0.4m;
@@ -247,6 +249,13 @@ public sealed class RiskPolicy
 
     [JsonPropertyName("maxSlippageBps")]
     public decimal MaxSlippageBps { get; set; } = 20m;
+
+    /// <summary>
+    /// 新开 T 腿前要求的费后期望净价差（bps）。0=关闭。
+    /// 用 |sellDev|+|buyDev| 的一部分估算可捕获价差，再扣双边费粗估。
+    /// </summary>
+    [JsonPropertyName("minRoundTripEdgeBps")]
+    public decimal MinRoundTripEdgeBps { get; set; } = 8m;
 }
 
 public sealed class FactorPolicy
@@ -429,6 +438,7 @@ public sealed class EffectiveStrategyParams
     public decimal DayLossStopPct { get; init; }
     public int SymbolPauseOnConsecutiveLosses { get; init; }
     public decimal BlockNearLimitPct { get; init; }
+    public decimal MinRoundTripEdgeBps { get; init; }
     public bool UseVolumeConfirm { get; init; }
     public decimal MinVolumeRatio { get; init; }
     public string Anchor { get; init; } = "vwap";

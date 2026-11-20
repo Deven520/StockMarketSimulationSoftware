@@ -127,9 +127,10 @@ public class ForceFlatOpenTQtyTests
     }
 
     [Fact]
-    public void SoftPrefer_Allows_Sell_When_Deviation_Met()
+    public void SoftPrefer_Allows_Sell_When_In_High_Band()
     {
         var policy = StrategyParameters.Default();
+        policy.Risk.MinRoundTripEdgeBps = 0;
         policy.Forecast = new ForecastPolicy
         {
             ForDate = DateTime.Today.ToString("yyyy-MM-dd"),
@@ -137,10 +138,17 @@ public class ForceFlatOpenTQtyTests
             PredictedLow = 200m,
             SoftBandMode = "softPrefer",
             CapHighByLimitPct = 12m,
-            Source = "ai"
+            Source = "ai",
+            CountsTowardAccuracy = true
         };
         policy.Triggers.SellDeviationPct = new ParamRange { Base = 1.0m, Min = 0.5m, Max = 1.5m };
-        var runtime = new SymbolRuntimeState { Symbol = "300502", State = TState.Idle };
+        var runtime = new SymbolRuntimeState
+        {
+            Symbol = "300502",
+            State = TState.Idle,
+            PathRegime = IntradayPathRegime.HighOpenLowGo,
+            PathPhase = PathPhase.Locked
+        };
         var pos = new Position
         {
             Symbol = "300502",
@@ -149,7 +157,74 @@ public class ForceFlatOpenTQtyTests
             SellableQuantity = 600,
             AvgCost = 200m
         };
-        var overrides = new RuntimeOverrides { SellDeviationPct = 1.0m, PositionPctPerTrade = 0.2m };
+        // 现价须进入高抛软区(约≥237)才允许新开卖腿
+        var overrides = new RuntimeOverrides
+        {
+            SellDeviationPct = 1.0m,
+            PositionPctPerTrade = 0.2m,
+            PathLabel = "HighOpenLowGo"
+        };
+        var eff = policy.ToEffective(overrides);
+        var last = 240m;
+        var ctx = new EvaluateContext
+        {
+            Policy = policy,
+            Effective = eff,
+            Quote = Q(last),
+            Position = pos,
+            Runtime = runtime,
+            AnchorPrice = 218m,
+            DeviationPct = (last - 218m) / 218m * 100m,
+            VolumeRatio = 1.2m,
+            Now = new DateTime(DateTime.Today.Year, DateTime.Today.Month, DateTime.Today.Day, 10, 5, 0),
+            StrategyDefinitionId = Guid.NewGuid(),
+            CanDoT = true,
+            ReferencePrice = 212m,
+            PullbackFromHighPct = 0.2m
+        };
+
+        var sig = new IntradayTStrategyEvaluator().Evaluate(ctx);
+        Assert.Equal(SignalAction.Sell, sig.Action);
+        Assert.Contains("高抛", sig.Reason);
+    }
+
+    [Fact]
+    public void SoftPrefer_Blocks_New_Sell_Outside_High_Band()
+    {
+        var policy = StrategyParameters.Default();
+        policy.Risk.MinRoundTripEdgeBps = 0;
+        policy.Forecast = new ForecastPolicy
+        {
+            ForDate = DateTime.Today.ToString("yyyy-MM-dd"),
+            PredictedHigh = 257m,
+            PredictedLow = 200m,
+            SoftBandMode = "softPrefer",
+            CapHighByLimitPct = 12m,
+            Source = "ai",
+            CountsTowardAccuracy = true
+        };
+        policy.Triggers.SellDeviationPct = new ParamRange { Base = 1.0m, Min = 0.5m, Max = 1.5m };
+        var runtime = new SymbolRuntimeState
+        {
+            Symbol = "300502",
+            State = TState.Idle,
+            PathRegime = IntradayPathRegime.HighOpenLowGo,
+            PathPhase = PathPhase.Locked
+        };
+        var pos = new Position
+        {
+            Symbol = "300502",
+            BaseQuantity = 600,
+            Quantity = 600,
+            SellableQuantity = 600,
+            AvgCost = 200m
+        };
+        var overrides = new RuntimeOverrides
+        {
+            SellDeviationPct = 1.0m,
+            PositionPctPerTrade = 0.2m,
+            PathLabel = "HighOpenLowGo"
+        };
         var eff = policy.ToEffective(overrides);
         var ctx = new EvaluateContext
         {
@@ -169,7 +244,7 @@ public class ForceFlatOpenTQtyTests
         };
 
         var sig = new IntradayTStrategyEvaluator().Evaluate(ctx);
-        Assert.Equal(SignalAction.Sell, sig.Action);
-        Assert.Contains("高抛", sig.Reason);
+        Assert.Equal(SignalAction.None, sig.Action);
+        Assert.Contains("跳过新开腿", sig.Reason);
     }
 }

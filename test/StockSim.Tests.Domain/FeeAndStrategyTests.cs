@@ -126,8 +126,17 @@ public class FeeAndStrategyTests
         };
 
         var policy = StrategyParameters.Default();
-        var effective = policy.ToEffective();
-        var runtime = new SymbolRuntimeState { Symbol = "600519", State = TState.Idle };
+        policy.Factors.UseVolumeConfirm = false;
+        policy.Risk.MinRoundTripEdgeBps = 0;
+        var runtime = new SymbolRuntimeState
+        {
+            Symbol = "600519",
+            State = TState.Idle,
+            PathRegime = IntradayPathRegime.HighOpenLowGo,
+            PathPhase = PathPhase.Locked,
+            Overrides = new RuntimeOverrides { PathLabel = "HighOpenLowGo" }
+        };
+        var effective = policy.ToEffective(runtime.Overrides);
         var signal = evaluator.Evaluate(new EvaluateContext
         {
             Policy = policy,
@@ -139,7 +148,8 @@ public class FeeAndStrategyTests
             DeviationPct = (1720m - 1700m) / 1700m * 100m,
             VolumeRatio = 1.2m,
             Now = new DateTime(2026, 11, 4, 10, 30, 0),
-            StrategyDefinitionId = Guid.NewGuid()
+            StrategyDefinitionId = Guid.NewGuid(),
+            CanDoT = true
         });
 
         Assert.Equal(SignalAction.Sell, signal.Action);

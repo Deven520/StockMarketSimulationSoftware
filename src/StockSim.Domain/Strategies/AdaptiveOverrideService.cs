@@ -71,6 +71,14 @@ public sealed class AdaptiveOverrideService
             sizeAdj *= playbook.SizeScale;
         }
 
+        // Locked + HighGo：再抬卖阈，减少早盘偏离单批清仓
+        if (runtime.PathPhase == PathPhase.Locked
+            && pathLabel is not null
+            && pathLabel.Contains("HighGo", StringComparison.OrdinalIgnoreCase))
+        {
+            sellAdj *= 1.08m;
+        }
+
         if (string.Equals(style, "defensive", StringComparison.OrdinalIgnoreCase)
             || string.Equals(policy.Style, "defensive", StringComparison.OrdinalIgnoreCase))
         {
