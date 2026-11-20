@@ -424,12 +424,42 @@ public sealed class NextDayPickFilterAppService
             // 弱市/高 MarketDrag：要求绝对偏强 + 相对不弱（stock5d 不可显著为负）
             if ((weakMarketDay || thresholds.PreferAbsoluteDirection)
                 && verdict.Stock5dPct is < 0m
-                && (strict || weakMarketDay))
+                && (strict || weakMarketDay || thresholds.PreferAbsoluteDirection))
             {
                 MarkReject(s,
                     $"{s.Symbol} 弱市闸门：近5日绝对偏弱（{verdict.Stock5dPct:0.##}%），优先绝对收涨候选",
                     rejected);
                 continue;
+            }
+
+            if ((weakMarketDay || thresholds.PreferAbsoluteDirection)
+                && verdict.Rs5dPct is { } rs5
+                && rs5 < thresholds.WeakMarketMinRs5dPct
+                && strict)
+            {
+                MarkReject(s,
+                    $"{s.Symbol} 绝对方向门控：近5日超额 {rs5:0.##}% &lt; {thresholds.WeakMarketMinRs5dPct:0.#}%",
+                    rejected);
+                continue;
+            }
+
+            // 题材含「放量」：近 1 日成交额须明显高于前 5 日均量
+            if (strict && NextDayPickGuard.RequiresVolumeSurge(goal.ThemePreference))
+            {
+                var surge = NextDayPickGuard.TryVolumeSurgeRatio(detail, asOf);
+                if (surge is null)
+                {
+                    MarkReject(s, $"{s.Symbol} 放量主题缺少可校验成交额序列", rejected);
+                    continue;
+                }
+
+                if (surge.Value < NextDayPickGuard.MinVolumeSurgeRatio)
+                {
+                    MarkReject(s,
+                        $"{s.Symbol} 放量未达标：近1日/前5日均额={surge.Value:0.##}（需≥{NextDayPickGuard.MinVolumeSurgeRatio:0.##}）",
+                        rejected);
+                    continue;
+                }
             }
 
             var industry = detail?.Fundamentals?.Industry?.Trim();

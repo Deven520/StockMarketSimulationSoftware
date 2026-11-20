@@ -17,10 +17,30 @@ public class NextDayPickMetricsTests
     [Fact]
     public void Evaluate_Up_But_Miss_Target()
     {
+        // 预期 3% → 降档阈值 1.5%；收益 1% 仍未中目标
         var (ret, dir, tgt) = NextDayPickMetrics.Evaluate(10m, 10.1m, expectedReturnPct: 3m);
         Assert.Equal(1m, ret);
         Assert.True(dir);
         Assert.False(tgt);
+        Assert.Equal(1.5m, NextDayPickMetrics.ResolveTargetThresholdPct(3m));
+    }
+
+    [Fact]
+    public void SoftTarget_Hits_When_Above_Half_Of_High_Expected()
+    {
+        // 预期 3% → 阈值 1.5%；收益 1.6% 目标中
+        var (ret, dir, tgt) = NextDayPickMetrics.Evaluate(10m, 10.16m, expectedReturnPct: 3m);
+        Assert.Equal(1.6m, ret);
+        Assert.True(dir);
+        Assert.True(tgt);
+    }
+
+    [Fact]
+    public void EffectiveDirectionHit_Filters_Micro_Up()
+    {
+        Assert.False(NextDayPickMetrics.EffectiveDirectionHit(0.2m, relativeStrengthPct: null));
+        Assert.True(NextDayPickMetrics.EffectiveDirectionHit(0.2m, relativeStrengthPct: 0.5m));
+        Assert.True(NextDayPickMetrics.EffectiveDirectionHit(0.6m, relativeStrengthPct: -1m));
     }
 
     [Fact]

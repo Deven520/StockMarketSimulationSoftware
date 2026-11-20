@@ -11,7 +11,10 @@ public class NextDayPickGuardTests
         Assert.Equal(3m, NextDayPickGuard.ClampExpectedReturnPct(7m));
         Assert.Equal(0.5m, NextDayPickGuard.ClampExpectedReturnPct(0.1m));
         Assert.Equal(2m, NextDayPickGuard.ClampExpectedReturnPct(2m));
+        Assert.Equal(2m, NextDayPickGuard.ClampExpectedReturnForNextDay(7m));
+        Assert.Equal(1.5m, NextDayPickGuard.ClampExpectedReturnForNextDay(1.5m));
     }
+
 
     [Fact]
     public void Calibrate_Raises_Chase_When_Frequent()
@@ -83,8 +86,12 @@ public class NextDayPickGuardTests
         Assert.Equal(NextDayThemeClass.NarrativeBlocked, NextDayPickGuard.ClassifyTheme("有重大利好"));
         Assert.Equal(NextDayThemeClass.NarrativeBlocked, NextDayPickGuard.ClassifyTheme("重磅利好"));
         Assert.Equal(NextDayThemeClass.SoftPenalty, NextDayPickGuard.ClassifyTheme("有利好"));
-        Assert.Equal(NextDayThemeClass.Ok, NextDayPickGuard.ClassifyTheme("有利好，持续放量"));
+        // 空心口号（无板块）即使带放量也软降权
+        Assert.Equal(NextDayThemeClass.SoftPenalty, NextDayPickGuard.ClassifyTheme("有利好，持续放量"));
         Assert.Equal(NextDayThemeClass.Ok, NextDayPickGuard.ClassifyTheme("超跌反弹"));
+        Assert.Equal(NextDayThemeClass.Ok, NextDayPickGuard.ClassifyTheme("半导体超跌反弹+放量"));
+        Assert.True(NextDayPickGuard.RequiresVolumeSurge("有利好，持续放量"));
+        Assert.False(NextDayPickGuard.RequiresVolumeSurge("超跌反弹"));
     }
 
     [Fact]

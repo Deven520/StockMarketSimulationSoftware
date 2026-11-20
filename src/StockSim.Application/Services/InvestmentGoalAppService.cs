@@ -174,9 +174,9 @@ public class InvestmentGoalAppService
         var horizonDays = tradeStyle == StockTradeStyle.NextDayRise ? 1 : request.HorizonDays;
         var nextTradeDay = PriceForecastMetrics.NextTradingDay(DateTime.Today);
 
-        // P0：次日预涨预期收益硬钳制（默认温和隔日涨幅，避免 5%～7% 废掉目标命中口径）
+        // P0：次日预涨预期再压到 SoftMax（≤2%），避免全员 3% 导致目标命中虚零
         var expected = tradeStyle == StockTradeStyle.NextDayRise
-            ? NextDayPickGuard.ClampExpectedReturnPct(request.ExpectedReturnPct)
+            ? NextDayPickGuard.ClampExpectedReturnForNextDay(request.ExpectedReturnPct)
             : request.ExpectedReturnPct;
 
         var goal = new InvestmentGoal
@@ -207,7 +207,7 @@ public class InvestmentGoalAppService
         {
             expectedReturnPct = goal.ExpectedReturnPct,
             expectedReturnNote = tradeStyle == StockTradeStyle.NextDayRise
-                ? $"已钳制在 {NextDayPickGuard.MinExpectedReturnPct}～{NextDayPickGuard.MaxExpectedReturnPct}%；主 KPI 为方向命中+相对强弱"
+                ? $"已钳制在 {NextDayPickGuard.MinExpectedReturnPct}～{NextDayPickGuard.SoftMaxExpectedReturnPct}%（硬上限{NextDayPickGuard.MaxExpectedReturnPct}%）；目标命中按降档阈值；主 KPI 为有效方向命中(≥{NextDayPickMetrics.EffectiveDirectionMinPct}%)+相对强弱"
                 : null,
             horizonDays = goal.HorizonDays,
             themePreference = goal.ThemePreference,

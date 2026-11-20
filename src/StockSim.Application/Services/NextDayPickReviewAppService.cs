@@ -317,15 +317,26 @@ public sealed class NextDayPickReviewAppService
         await _db.SaveChangesAsync(ct);
 
         var detail = await _detailProvider.GetDetailAsync(review.Symbol, review.Name, ct);
-        if (detail is null || detail.IsSimulated)
+        if (detail is null)
         {
+            // 无详情时仍尽量用已有对账字段补标签，供校准
+            await EnrichMetricsWithoutDetailAsync(review, day, ct);
             review.Status = NextDayPickReviewStatus.Skipped;
-            review.Notes = detail is null ? "无行情详情，跳过" : "模拟/回退行情，跳过 AI 复盘";
+            review.Notes = "无行情详情，跳过";
             review.Summary = review.Notes;
             review.CompletedAt = DateTime.Now;
             await _db.SaveChangesAsync(ct);
             queueItem.OutputPayload = review.Notes;
             return;
+        }
+
+        // 模拟/回退行情仍跑 AI：主依据对账与选股理由，避免夜更无 PickHints
+        if (detail.IsSimulated)
+        {
+            review.Notes = "行情详情为模拟/回退，复盘主依据对账与选股理由";
+            _logger.LogWarning(
+                "NextDayPickReview {Symbol} {Date}: detail IsSimulated, continue with metrics+AI",
+                review.Symbol, day);
         }
 
         await EnrichMetricsAsync(review, detail, day, ct);
@@ -392,6 +403,11 @@ public sealed class NextDayPickReviewAppService
         var dirRate = scored.Count == 0
             ? (decimal?)null
             : Math.Round(100m * scored.Count(r => r.DirectionHit == true) / scored.Count, 1);
+        var effRate = scored.Count == 0
+            ? (decimal?)null
+            : Math.Round(100m * scored.Count(r =>
+                r.ReturnPct is { } rp
+                && NextDayPickMetrics.EffectiveDirectionHit(rp, r.RelativeStrengthPct)) / scored.Count, 1);
         var tgtScored = rows.Where(r => r.TargetHit.HasValue).ToList();
         var tgtRate = tgtScored.Count == 0
             ? (decimal?)null
@@ -421,7 +437,9 @@ public sealed class NextDayPickReviewAppService
         {
             sampleSize = rows.Count,
             directionHitRatePct = dirRate,
+            effectiveDirectionHitRatePct = effRate,
             targetHitRatePct = tgtRate,
+            softTargetNote = "TargetHit 按降档阈值（预期>1.5%时取 max(1%,预期×50%)）",
             topFailureTags = tagCounts.OrderByDescending(kv => kv.Value)
                 .Take(8)
                 .Select(kv => new { tag = kv.Key, count = kv.Value })
@@ -436,6 +454,8 @@ public sealed class NextDayPickReviewAppService
                 summary = r.Summary,
                 returnPct = r.ReturnPct,
                 directionHit = r.DirectionHit,
+                effectiveDirectionHit = r.ReturnPct is { } rp
+                    && NextDayPickMetrics.EffectiveDirectionHit(rp, r.RelativeStrengthPct),
                 targetHit = r.TargetHit,
                 relativeStrengthPct = r.RelativeStrengthPct,
                 theme = r.ThemePreference,
@@ -444,8 +464,9 @@ public sealed class NextDayPickReviewAppService
             }).ToList(),
             guidance =
                 "须消化 recentNextDayPickReviews：高发失败标签题材/模式降权；" +
-                "禁止纯叙事无量能追高；须给出相对强弱与失效情景（invalidation）；" +
-                "ThemeFade/ChaseHigh/WeakRelative 代表模式勿重复。"
+                "禁止空心口号题材（须板块实体+量能/超跌）；" +
+                "主 KPI 看 effectiveDirectionHitRatePct 与相对强弱；" +
+                "ThemeFade/ChaseHigh/WeakRelative/MarketDrag 代表模式勿重复。"
         };
     }
 
@@ -596,64 +617,103 @@ public sealed class NextDayPickReviewAppService
         return (true, $"已入队次日预涨复盘：{name}({symbol}) {target:yyyy-MM-dd}", queue.Id);
     }
 
-    private async Task EnrichMetricsAsync(
+    private async Task EnrichMetricsWithoutDetailAsync(
         NextDayPickReview review,
-        StockDetailBundle detail,
         DateTime target,
         CancellationToken ct)
     {
-        if (review.BaselinePrice is > 0 && review.ActualClose is > 0 && review.ReturnPct is null)
-        {
-            var expected = review.ExpectedReturnPct ?? 0m;
-            var (ret, dir, tgt) = NextDayPickMetrics.Evaluate(
-                review.BaselinePrice.Value, review.ActualClose.Value, expected);
-            review.ReturnPct = ret;
-            review.DirectionHit = dir;
-            review.TargetHit = tgt;
-        }
-
-        if (review.RelativeStrengthPct is null && review.ReturnPct.HasValue)
+        RecalcReturnFields(review);
+        if (review.ReturnPct.HasValue)
         {
             var indexRet = await TryGetIndexReturnPctAsync(target, ct);
             review.RelativeStrengthPct = NextDayPickMetrics.RelativeStrengthPct(
                 review.ReturnPct.Value, indexRet);
         }
 
-        // 始终用 OHLC 重算并合并标签；命中则清空
+        ApplyFailureTags(review, openGap: null, nearHigh: null);
+        await Task.CompletedTask;
+    }
+
+    private async Task EnrichMetricsAsync(
+        NextDayPickReview review,
+        StockDetailBundle detail,
+        DateTime target,
+        CancellationToken ct)
+    {
+        RecalcReturnFields(review);
+
+        // 始终尝试用指数补全相对强弱（含模拟行情日），避免 Timing 标签刷屏
+        if (review.ReturnPct.HasValue)
+        {
+            var indexRet = await TryGetIndexReturnPctAsync(target, ct);
+            if (indexRet is not null || review.RelativeStrengthPct is null)
+            {
+                review.RelativeStrengthPct = NextDayPickMetrics.RelativeStrengthPct(
+                    review.ReturnPct.Value, indexRet);
+            }
+        }
+
         if (review.DirectionHit == true)
         {
             review.FailureTagsJson = null;
             return;
         }
 
-        if (review.DirectionHit == false)
+        if (review.DirectionHit != false) return;
+
+        decimal? openGap = null;
+        var bar = detail.DailyBars?.FirstOrDefault(b => b.Date.Date == target);
+        if (bar is not null && review.BaselinePrice is > 0 && bar.Open > 0)
+            openGap = Math.Round((bar.Open - review.BaselinePrice.Value) / review.BaselinePrice.Value * 100m, 2);
+
+        bool? nearHigh = null;
+        var recent = detail.DailyBars?
+            .Where(b => b.Date.Date <= target && b.High > 0)
+            .OrderByDescending(b => b.Date)
+            .Take(21)
+            .ToList();
+        if (recent is { Count: >= 5 } && review.BaselinePrice is > 0)
         {
-            decimal? openGap = null;
-            var bar = detail.DailyBars?.FirstOrDefault(b => b.Date.Date == target);
-            if (bar is not null && review.BaselinePrice is > 0 && bar.Open > 0)
-                openGap = Math.Round((bar.Open - review.BaselinePrice.Value) / review.BaselinePrice.Value * 100m, 2);
-
-            bool? nearHigh = null;
-            var recent = detail.DailyBars?
-                .Where(b => b.Date.Date <= target && b.High > 0)
-                .OrderByDescending(b => b.Date)
-                .Take(21)
-                .ToList();
-            if (recent is { Count: >= 5 } && review.BaselinePrice is > 0)
-            {
-                var hi20 = recent.Skip(1).Take(20).Select(b => b.High).DefaultIfEmpty(0).Max();
-                if (hi20 > 0)
-                    nearHigh = review.BaselinePrice.Value >= hi20 * 0.97m;
-            }
-
-            var inferred = NextDayPickMetrics.InferFailureTags(
-                false, review.ReturnPct ?? 0m, review.RelativeStrengthPct, openGap, nearHigh);
-            var existing = ParseTags(review.FailureTagsJson);
-            var merged = NextDayPickMetrics.MergeFailureTags(false, inferred, existing);
-            review.FailureTagsJson = merged.Count > 0
-                ? JsonSerializer.Serialize(merged, JsonOpts)
-                : null;
+            var hi20 = recent.Skip(1).Take(20).Select(b => b.High).DefaultIfEmpty(0).Max();
+            if (hi20 > 0)
+                nearHigh = review.BaselinePrice.Value >= hi20 * 0.97m;
         }
+
+        ApplyFailureTags(review, openGap, nearHigh);
+    }
+
+    private static void RecalcReturnFields(NextDayPickReview review)
+    {
+        if (review.BaselinePrice is not > 0 || review.ActualClose is not > 0) return;
+
+        var expected = review.ExpectedReturnPct ?? NextDayPickGuard.DefaultExpectedReturnPct;
+        var (ret, dir, tgt) = NextDayPickMetrics.Evaluate(
+            review.BaselinePrice.Value, review.ActualClose.Value, expected);
+        review.ReturnPct = ret;
+        review.DirectionHit = dir;
+        review.TargetHit = tgt;
+    }
+
+    private static void ApplyFailureTags(
+        NextDayPickReview review,
+        decimal? openGap,
+        bool? nearHigh)
+    {
+        if (review.DirectionHit == true)
+        {
+            review.FailureTagsJson = null;
+            return;
+        }
+
+        if (review.DirectionHit != false) return;
+
+        var inferred = NextDayPickMetrics.InferFailureTags(
+            false, review.ReturnPct ?? 0m, review.RelativeStrengthPct, openGap, nearHigh);
+        var existing = ParseTags(review.FailureTagsJson);
+        var merged = NextDayPickMetrics.MergeFailureTags(false, inferred, existing);
+        review.FailureTagsJson = merged.Count > 0
+            ? JsonSerializer.Serialize(merged, JsonOpts)
+            : null;
     }
 
     private async Task<(string Prompt, string InputPayload)> BuildPromptAndContextAsync(
@@ -700,18 +760,26 @@ public sealed class NextDayPickReviewAppService
 
         var indexRet = await TryGetIndexReturnPctAsync(day, ct);
 
+        var softTargetThr = NextDayPickMetrics.ResolveTargetThresholdPct(
+            review.ExpectedReturnPct ?? NextDayPickGuard.DefaultExpectedReturnPct);
+        var effectiveDir = review.ReturnPct is { } rp
+            && NextDayPickMetrics.EffectiveDirectionHit(rp, review.RelativeStrengthPct);
+
         var context = new
         {
             schema = "NextDayPickReview/v1",
             symbol = review.Symbol,
             name = review.Name,
             targetTradeDate = day.ToString("yyyy-MM-dd"),
+            marketDataSimulated = detail.IsSimulated,
             themePreference = review.ThemePreference,
             expectedReturnPct = review.ExpectedReturnPct,
+            softTargetThresholdPct = softTargetThr,
             baselinePrice = review.BaselinePrice,
             actualClose = review.ActualClose,
             returnPct = review.ReturnPct,
             directionHit = review.DirectionHit,
+            effectiveDirectionHit = effectiveDir,
             targetHit = review.TargetHit,
             relativeStrengthPct = review.RelativeStrengthPct,
             indexSymbol = IndexSymbol,

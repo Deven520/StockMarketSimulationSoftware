@@ -21,12 +21,29 @@ public static class NextDayPickMetrics
         return Math.Round((actualClose - baselinePrice) / baselinePrice * 100m, 4);
     }
 
-    /// <summary>方向命中：次日收益 &gt; 0。</summary>
+    /// <summary>原始方向命中：次日收益 &gt; 0（含微涨）。</summary>
     public static bool DirectionHit(decimal returnPct) => returnPct > 0m;
 
-    /// <summary>目标命中：次日收益 ≥ 预期收益%。</summary>
+    /// <summary>有效方向命中：收益 ≥0.5%，或微涨且相对指数为正（过滤注水微涨）。</summary>
+    public const decimal EffectiveDirectionMinPct = 0.5m;
+
+    public static bool EffectiveDirectionHit(decimal returnPct, decimal? relativeStrengthPct = null) =>
+        returnPct >= EffectiveDirectionMinPct
+        || (returnPct > 0m && relativeStrengthPct is > 0m);
+
+    /// <summary>
+    /// 目标阈值：预期偏高（&gt;1.5%）时降档为 max(1%, 预期×50%)，避免全员 3% 永不中。
+    /// </summary>
+    public static decimal ResolveTargetThresholdPct(decimal expectedReturnPct)
+    {
+        var e = expectedReturnPct <= 0 ? NextDayPickGuard.DefaultExpectedReturnPct : expectedReturnPct;
+        if (e <= 1.5m) return e;
+        return Math.Max(1.0m, Math.Round(e * 0.5m, 2));
+    }
+
+    /// <summary>目标命中：次日收益 ≥ 降档后的目标阈值。</summary>
     public static bool TargetHit(decimal returnPct, decimal expectedReturnPct) =>
-        returnPct >= expectedReturnPct;
+        returnPct >= ResolveTargetThresholdPct(expectedReturnPct);
 
     public static (decimal ReturnPct, bool DirectionHit, bool TargetHit) Evaluate(
         decimal baselinePrice,

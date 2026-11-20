@@ -8,9 +8,12 @@ namespace StockSim.Domain.Strategies;
 /// </summary>
 public static class NextDayPickGuard
 {
-    public const decimal DefaultExpectedReturnPct = 2.0m;
+    public const decimal DefaultExpectedReturnPct = 1.5m;
     public const decimal MinExpectedReturnPct = 0.5m;
+    /// <summary>硬上限；创建目标时优先钳到 SoftMaxExpectedReturnPct。</summary>
     public const decimal MaxExpectedReturnPct = 3.0m;
+    /// <summary>入库推荐上限，避免全员卡 3% 导致目标命中虚零。</summary>
+    public const decimal SoftMaxExpectedReturnPct = 2.0m;
 
     public const decimal ConfidenceFloor = 0.55m;
     public const int MaxSameThemePerBatch = 2;
@@ -30,8 +33,11 @@ public static class NextDayPickGuard
     /// <summary>指数当日涨跌低于该值 → 弱市，提高门槛。</summary>
     public const decimal IndexWeakDayThresholdPct = -1.5m;
 
-    /// <summary>弱市下要求的最低相对强弱（近 5 日）。</summary>
-    public const decimal WeakMarketMinRs5dPct = 0.5m;
+    /// <summary>弱市/绝对方向门控下要求的最低相对强弱（近 5 日）。</summary>
+    public const decimal WeakMarketMinRs5dPct = 1.0m;
+
+    /// <summary>题材含「放量」时，近 1 日成交额相对前 5 日均量的最低倍数。</summary>
+    public const decimal MinVolumeSurgeRatio = 1.2m;
 
     /// <summary>题材历史方向命中率低于该值 → 降权/需更强催化剂。</summary>
     public const decimal ThemeHitRateFloorPct = 40.0m;
@@ -45,23 +51,58 @@ public static class NextDayPickGuard
         if (string.IsNullOrWhiteSpace(theme)) return NextDayThemeClass.Ok;
         var t = theme.Trim();
         var hasSupport = ContainsAny(t, "放量", "量能", "成交额", "超跌", "反弹", "底部", "低位", "企稳", "低估");
-        var heavyNarrative = ContainsAny(t, "重大利好", "重磅利好", "重大消息", "突发利好", "重磅消息");
+        var heavyNarrative = ContainsAny(t, "重大利好", "重磅利好", "重大消息", "突发利好", "重磅消息", "有重大利好");
         if (heavyNarrative && !hasSupport)
             return NextDayThemeClass.NarrativeBlocked;
+
+        // 空心口号（无板块）：抬门槛，迫使写具体板块+催化
+        if (IsVagueThemeSlogan(t))
+            return NextDayThemeClass.SoftPenalty;
 
         // 纯「有利好/利好」类、无量能或超跌约束 → 软降权（抬 confidence）
         if (!hasSupport && ContainsAny(t, "利好", "政策催化", "消息催化"))
             return NextDayThemeClass.SoftPenalty;
 
+        // 「利好+放量」但无板块实体 → 软降权；「超跌反弹」等风格词可无板块
+        if (ContainsAny(t, "利好") && hasSupport && !HasSectorCue(t))
+            return NextDayThemeClass.SoftPenalty;
+
         return NextDayThemeClass.Ok;
     }
+
+    /// <summary>空心题材口号（无行业/板块实体）。</summary>
+    public static bool IsVagueThemeSlogan(string? theme)
+    {
+        if (string.IsNullOrWhiteSpace(theme)) return false;
+        var norm = theme.Trim()
+            .Replace(" ", "", StringComparison.Ordinal)
+            .Replace("，", ",", StringComparison.Ordinal)
+            .Replace("、", ",", StringComparison.Ordinal);
+        return norm is "有利好,持续放量" or "有利好持续放量" or "有利好" or "持续放量"
+            or "有重大利好" or "重大利好" or "政策催化" or "消息催化";
+    }
+
+    /// <summary>题材是否含板块/行业线索。</summary>
+    public static bool HasSectorCue(string? theme)
+    {
+        if (string.IsNullOrWhiteSpace(theme)) return false;
+        if (SectorAliases.Keys.Any(k => theme.Contains(k, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return SectorAliases.Values.Any(aliases =>
+            aliases.Any(a => theme.Contains(a, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>题材是否要求放量硬校验。</summary>
+    public static bool RequiresVolumeSurge(string? theme) =>
+        !string.IsNullOrWhiteSpace(theme)
+        && ContainsAny(theme, "放量", "量能", "持续放量");
 
     public static string? ThemeClassHint(NextDayThemeClass cls) => cls switch
     {
         NextDayThemeClass.NarrativeBlocked =>
-            "题材偏纯叙事（如「重大利好」且无放量/超跌约束），入库将被拦截；建议改为「超跌反弹」或「有利好+持续放量」等可验证约束。",
+            "题材偏纯叙事（如「重大利好」且无放量/超跌约束），入库将被拦截；建议改为「板块+超跌反弹」或「板块+有利好+持续放量」。",
         NextDayThemeClass.SoftPenalty =>
-            "题材偏叙事、缺少量能/超跌约束，将抬高置信度门槛并限制新闻/题材类催化。",
+            "题材偏空心口号或缺少板块实体，将抬高置信度门槛；请写明具体板块/催化并带量能或超跌约束。",
         _ => null
     };
 
@@ -73,6 +114,29 @@ public static class NextDayPickGuard
         if (expectedReturnPct < MinExpectedReturnPct) return MinExpectedReturnPct;
         if (expectedReturnPct > MaxExpectedReturnPct) return MaxExpectedReturnPct;
         return Math.Round(expectedReturnPct, 2);
+    }
+
+    /// <summary>次日预涨入库用：硬钳制后再压到 SoftMax（默认推荐 ≤2%）。</summary>
+    public static decimal ClampExpectedReturnForNextDay(decimal expectedReturnPct)
+    {
+        var v = ClampExpectedReturnPct(expectedReturnPct);
+        if (v > SoftMaxExpectedReturnPct) return SoftMaxExpectedReturnPct;
+        return v;
+    }
+
+    /// <summary>近 1 日成交额 / 前 5 日均额；数据不足返回 null。</summary>
+    public static decimal? TryVolumeSurgeRatio(StockDetailBundle? detail, DateTime asOf)
+    {
+        if (detail?.DailyBars is null) return null;
+        var bars = detail.DailyBars
+            .Where(b => b.Date.Date <= asOf.Date && b.Amount > 0)
+            .OrderBy(b => b.Date)
+            .ToList();
+        if (bars.Count < 6) return null;
+        var last = bars[^1].Amount;
+        var avg5 = bars.Skip(bars.Count - 6).Take(5).Average(b => b.Amount);
+        if (avg5 <= 0) return null;
+        return Math.Round(last / avg5, 3);
     }
 
     public static bool TryParseConfidence(string? payloadJson, out decimal confidence)
@@ -374,6 +438,12 @@ public static class NextDayPickGuard
                 && rs5 < thresholds.WeakMarketMinRs5dPct)
                 reasons.Add(
                     $"大盘弱市门控：指数近1日 {index1:N2}%，个股5日超额仅 {rs5:N2}%，未达 {thresholds.WeakMarketMinRs5dPct:N1}%");
+
+            // 高 MarketDrag 校准后：即使指数非弱市，也要求 5 日超额达标
+            if (thresholds.PreferAbsoluteDirection
+                && rs5 < thresholds.WeakMarketMinRs5dPct)
+                reasons.Add(
+                    $"绝对方向门控：近5日超额 {rs5:N2}% 未达 {thresholds.WeakMarketMinRs5dPct:N1}%");
         }
 
         if (reasons.Count > 0)
