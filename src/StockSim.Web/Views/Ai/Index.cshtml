@@ -5,6 +5,7 @@
 @{
     var cursorStatus = ViewBag.CursorStatus as CursorAiConnectionStatus;
     var goals = (IReadOnlyList<InvestmentGoalDto>)(ViewBag.Goals ?? Array.Empty<InvestmentGoalDto>());
+    var themeCat = ViewBag.ThemeCatalog as NextDayThemeComposerCatalogDto;
 }
 <h2>AI 工作台</h2>
 <p class="text-muted">输入<strong>预期收益、周期、题材偏好、选股类型</strong>（含次日上涨预选）→ 任务进入 <a asp-action="Queue">AI 队列</a> 异步执行 → 完成后勾选入库；每日跟踪达成率；次日预选在目标日收盘后统计命中率。</p>
@@ -35,7 +36,7 @@
 <div class="card mb-4">
     <div class="card-body">
         <h5 class="card-title">按目标 AI 选股</h5>
-        <form asp-action="CreateGoal" method="post" class="row g-3">
+        <form asp-action="CreateGoal" method="post" class="row g-3" id="goalForm">
             <div class="col-md-3">
                 <label class="form-label">预期收益 (%)</label>
                 <input id="expectedReturnPct" name="expectedReturnPct" type="number" step="0.1" min="0.1" class="form-control" value="3" required />
@@ -45,10 +46,131 @@
                 <label class="form-label">预期周期（天）</label>
                 <input id="horizonDays" name="horizonDays" type="number" min="1" class="form-control" value="10" required />
             </div>
-            <div class="col-md-6">
+            <div class="col-md-6" id="themeFreeWrap">
                 <label class="form-label">题材偏好</label>
-                <input name="themePreference" class="form-control" placeholder="例如：新能源、低估值银行、高股息" required />
+                <input id="themePreference" name="themePreference" class="form-control" placeholder="例如：新能源、低估值银行、高股息" required />
             </div>
+
+            <div class="col-12 d-none" id="themeComposerWrap">
+                <label class="form-label">题材（结构化：板块 + 风格 + 催化）</label>
+                @if (themeCat is not null && !string.IsNullOrWhiteSpace(themeCat.MarketNote))
+                {
+                    <div class="form-text mb-2 @(themeCat.WeakOrDragHeavy ? "text-warning" : "")">@themeCat.MarketNote</div>
+                }
+                @if (themeCat?.RecommendedChips is { Count: > 0 })
+                {
+                    <div class="mb-2">
+                        <span class="small text-muted me-1">推荐：</span>
+                        @foreach (var c in themeCat.RecommendedChips)
+                        {
+                            var rate = c.DirectionHitRatePct.HasValue
+                                ? $"{c.DirectionHitRatePct:0.#}%({c.SampleSize})"
+                                : "模板";
+                            <button type="button" class="btn btn-sm btn-outline-success me-1 mb-1 theme-chip"
+                                    data-theme="@c.Theme" title="@rate">@c.Theme <span class="text-muted">@rate</span></button>
+                        }
+                    </div>
+                }
+                @if (themeCat?.CautionChips is { Count: > 0 })
+                {
+                    <div class="mb-2">
+                        <span class="small text-muted me-1">慎用：</span>
+                        @foreach (var c in themeCat.CautionChips.Take(5))
+                        {
+                            var rate = c.DirectionHitRatePct.HasValue
+                                ? $"{c.DirectionHitRatePct:0.#}%({c.SampleSize})"
+                                : "低";
+                            <span class="badge text-bg-light border me-1 mb-1 text-muted" title="历史命中 @rate">@c.Theme @rate</span>
+                        }
+                    </div>
+                }
+                @if (themeCat?.DownweightThemes is { Count: > 0 })
+                {
+                    <div class="mb-2 small text-warning">今日降权：@string.Join("、", themeCat.DownweightThemes)</div>
+                }
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <select id="themeSector" name="themeSector" class="form-select">
+                            <option value="">板块（可选/部分风格必填）</option>
+                            @if (themeCat is not null)
+                            {
+                                foreach (var s in themeCat.Sectors)
+                                {
+                                    <option value="@s">@s</option>
+                                }
+                            }
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <select id="themeStyle" name="themeStyle" class="form-select">
+                            <option value="">风格</option>
+                            @if (themeCat is not null)
+                            {
+                                foreach (var s in themeCat.Styles)
+                                {
+                                    if (s.Disabled)
+                                    {
+                                        <option value="@s.Id" disabled
+                                                data-phrase="@s.Phrase" data-requires-sector="@s.RequiresSector.ToString().ToLowerInvariant()">
+                                            @(s.Recommended ? "★ " : "")@s.Label@(s.HighRisk ? " ⚠" : "")（弱市禁用）
+                                        </option>
+                                    }
+                                    else
+                                    {
+                                        <option value="@s.Id"
+                                                data-phrase="@s.Phrase" data-requires-sector="@s.RequiresSector.ToString().ToLowerInvariant()">
+                                            @(s.Recommended ? "★ " : "")@s.Label@(s.HighRisk ? " ⚠" : "")
+                                        </option>
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                <option value="oversold">★ 超跌反弹</option>
+                                <option value="volume">★ 持续放量</option>
+                                <option value="stabilize">★ 低位企稳</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <select id="themeCatalyst" name="themeCatalyst" class="form-select">
+                            @if (themeCat is not null)
+                            {
+                                foreach (var c in themeCat.Catalysts)
+                                {
+                                    if (c == "无")
+                                    {
+                                        <option value="@c" selected>催化：@c</option>
+                                    }
+                                    else
+                                    {
+                                        <option value="@c">催化：@c</option>
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                <option value="无" selected>催化：无</option>
+                                <option value="订单">催化：订单</option>
+                                <option value="政策">催化：政策</option>
+                                <option value="业绩">催化：业绩</option>
+                                <option value="放量">催化：放量</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <label class="form-label small mb-1">预览 / 高级自定义</label>
+                    <input id="themePreferenceNext" class="form-control" placeholder="点芯片或三块选择后自动填充；也可手改" />
+                    <input type="hidden" id="themePreferenceHidden" name="themePreference" value="" disabled />
+                </div>
+                <div class="form-check mt-2">
+                    <input class="form-check-input" type="checkbox" name="acceptThemeRewrite" value="true" id="acceptThemeRewrite" />
+                    <label class="form-check-label small" for="acceptThemeRewrite">空心口号时接受自动改写为「超跌反弹」</label>
+                </div>
+                <div class="form-text" id="themeComposeHint">公式：板块 + 风格（如「半导体超跌反弹」）；避免单独「有利好 / 有重大利好」。</div>
+            </div>
+
             <div class="col-12">
                 <label class="form-label d-block">选股类型</label>
                 <div class="form-check form-check-inline">
@@ -83,6 +205,32 @@
     const exp = document.getElementById('expectedReturnPct');
     const hor = document.getElementById('horizonDays');
     const hint = document.getElementById('expectedHint');
+    const freeWrap = document.getElementById('themeFreeWrap');
+    const composerWrap = document.getElementById('themeComposerWrap');
+    const freeInput = document.getElementById('themePreference');
+    const nextInput = document.getElementById('themePreferenceNext');
+    const hiddenInput = document.getElementById('themePreferenceHidden');
+    const sectorEl = document.getElementById('themeSector');
+    const styleEl = document.getElementById('themeStyle');
+    const catalystEl = document.getElementById('themeCatalyst');
+
+    function composePreview() {
+        if (!nextInput) return;
+        const sector = (sectorEl?.value || '').trim();
+        const opt = styleEl?.selectedOptions?.[0];
+        const phrase = (opt?.dataset?.phrase || '').trim();
+        const cat = (catalystEl?.value || '').trim();
+        const parts = [];
+        if (sector && phrase) {
+            let s = sector + phrase;
+            if (cat && cat !== '无' && phrase.indexOf(cat) < 0) s += '+' + cat;
+            nextInput.value = s;
+            return;
+        }
+        if (phrase) { nextInput.value = phrase; return; }
+        if (sector) { nextInput.value = sector; return; }
+    }
+
     function sync() {
         const next = document.getElementById('styleNextDay')?.checked;
         if (!exp || !hor) return;
@@ -93,14 +241,45 @@
             if (!exp.dataset.touched) exp.value = '2';
             hor.value = '1'; hor.readOnly = true;
             if (hint) hint.textContent = '次日预涨：预期钳制 0.5%～3%，主看方向命中与相对强弱';
+            freeWrap?.classList.add('d-none');
+            composerWrap?.classList.remove('d-none');
+            if (freeInput) { freeInput.disabled = true; freeInput.required = false; }
+            if (hiddenInput) { hiddenInput.disabled = false; }
+            if (nextInput && !nextInput.value) composePreview();
         } else {
             exp.min = '0.1'; exp.removeAttribute('max');
             hor.readOnly = false;
             if (hint) hint.textContent = '做T/趋势可按组合周期填写预期收益';
+            freeWrap?.classList.remove('d-none');
+            composerWrap?.classList.add('d-none');
+            if (freeInput) { freeInput.disabled = false; freeInput.required = true; }
+            if (hiddenInput) { hiddenInput.disabled = true; }
         }
     }
+
     exp?.addEventListener('input', () => { exp.dataset.touched = '1'; });
     document.querySelectorAll('input[name=tradeStyle]').forEach(r => r.addEventListener('change', sync));
+    sectorEl?.addEventListener('change', composePreview);
+    styleEl?.addEventListener('change', composePreview);
+    catalystEl?.addEventListener('change', composePreview);
+
+    document.querySelectorAll('.theme-chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const t = btn.getAttribute('data-theme') || '';
+            if (nextInput) nextInput.value = t;
+            // 芯片直接写入预览；清空风格以免服务端 Compose 覆盖
+            if (styleEl) styleEl.value = '';
+            if (sectorEl) sectorEl.value = '';
+        });
+    });
+
+    document.getElementById('goalForm')?.addEventListener('submit', () => {
+        const next = document.getElementById('styleNextDay')?.checked;
+        if (next && hiddenInput && nextInput) {
+            hiddenInput.value = (nextInput.value || '').trim();
+        }
+    });
+
     sync();
 })();
 </script>

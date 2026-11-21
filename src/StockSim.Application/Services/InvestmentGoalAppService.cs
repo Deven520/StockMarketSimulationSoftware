@@ -47,6 +47,10 @@ public class InvestmentGoalAppService
         _logger = logger;
     }
 
+    /// <summary>次日预涨题材三块选择器目录（命中率芯片）。</summary>
+    public Task<NextDayThemeComposerCatalogDto> GetThemeComposerCatalogAsync(CancellationToken ct = default) =>
+        _nextDayPickFilter.GetThemeComposerCatalogAsync(ct);
+
     /// <summary>删除投资目标及其入选股、进度记录。</summary>
     public async Task<(bool Ok, string Message)> DeleteAsync(Guid id, CancellationToken ct = default)
     {
@@ -162,7 +166,6 @@ public class InvestmentGoalAppService
     {
         if (request.ExpectedReturnPct <= 0) throw new ArgumentException("预期收益须大于 0");
         if (request.HorizonDays < 1) throw new ArgumentException("预期周期至少 1 天");
-        if (string.IsNullOrWhiteSpace(request.ThemePreference)) throw new ArgumentException("请填写题材偏好");
 
         var tradeStyle = request.TradeStyle switch
         {
@@ -179,11 +182,53 @@ public class InvestmentGoalAppService
             ? NextDayPickGuard.ClampExpectedReturnForNextDay(request.ExpectedReturnPct)
             : request.ExpectedReturnPct;
 
+        string themePreference;
+        string? themeRewriteNote = null;
+        if (tradeStyle == StockTradeStyle.NextDayRise)
+        {
+            var thresholds = await _nextDayPickFilter.GetCalibratedThresholdsAsync(ct);
+            var weakOrDrag = thresholds.PreferAbsoluteDirection;
+            try
+            {
+                var index = await _detailProvider.GetDetailAsync(
+                    NextDayPickReviewAppService.IndexSymbol, "创业板指", ct);
+                var index1d = NextDayPickGuard.TryIndexReturn1d(index, DateTime.Today);
+                if (NextDayPickGuard.IsWeakMarketDay(index1d, thresholds))
+                    weakOrDrag = true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Index unavailable when normalizing theme");
+            }
+
+            var normalized = NextDayThemeComposer.NormalizeForNextDay(
+                request.ThemePreference,
+                request.ThemeSector,
+                request.ThemeStyle,
+                request.ThemeCatalyst,
+                request.AcceptThemeRewrite,
+                weakOrDrag);
+            themePreference = normalized.Theme;
+            if (normalized.Rewritten)
+                themeRewriteNote = $"题材已改写：{normalized.Suggestion?.Original} → {normalized.Theme}";
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(request.ThemePreference)
+                && string.IsNullOrWhiteSpace(request.ThemeSector)
+                && string.IsNullOrWhiteSpace(request.ThemeStyle))
+                throw new ArgumentException("请填写题材偏好");
+            themePreference = !string.IsNullOrWhiteSpace(request.ThemeSector)
+                              || !string.IsNullOrWhiteSpace(request.ThemeStyle)
+                ? NextDayThemeComposer.Compose(request.ThemeSector, request.ThemeStyle, request.ThemeCatalyst)
+                : request.ThemePreference.Trim();
+        }
+
         var goal = new InvestmentGoal
         {
             ExpectedReturnPct = expected,
             HorizonDays = horizonDays,
-            ThemePreference = request.ThemePreference.Trim(),
+            ThemePreference = themePreference,
             TradeStyle = tradeStyle,
             Status = InvestmentGoalStatus.Draft
         };
@@ -199,7 +244,8 @@ public class InvestmentGoalAppService
             recentPickReviews = await _nextDayPickReviews.LoadRecentReviewsForPromptAsync(15, ct);
             pickCalibration = await _nextDayPickFilter.LoadCalibrationForPromptAsync(ct);
             var themeClass = NextDayPickGuard.ClassifyTheme(goal.ThemePreference);
-            themeWarning = NextDayPickGuard.ThemeClassHint(themeClass);
+            themeWarning = themeRewriteNote
+                           ?? NextDayPickGuard.ThemeClassHint(themeClass);
         }
 
         var correlationId = Guid.NewGuid();

@@ -239,6 +239,121 @@ public sealed class NextDayPickFilterAppService
         };
     }
 
+    /// <summary>Goals 页三块选择器 + 命中率芯片目录。</summary>
+    public async Task<NextDayThemeComposerCatalogDto> GetThemeComposerCatalogAsync(CancellationToken ct = default)
+    {
+        var thresholds = await GetCalibratedThresholdsAsync(ct);
+        var themes = await GetThemeHitStatsAsync(28, ct);
+        var hints = await LoadPickHintRulesAsync(ct);
+        var weakOrDrag = thresholds.PreferAbsoluteDirection;
+
+        StockDetailBundle? index = null;
+        try
+        {
+            index = await _details.GetDetailAsync(
+                NextDayPickReviewAppService.IndexSymbol, "创业板指", ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Index detail unavailable for theme catalog");
+        }
+
+        var index1d = NextDayPickGuard.TryIndexReturn1d(index, DateTime.Today);
+        if (NextDayPickGuard.IsWeakMarketDay(index1d, thresholds))
+            weakOrDrag = true;
+
+        var styleAllowed = NextDayThemeComposer.StylesForMarket(weakOrDrag);
+        var styleChips = NextDayThemeComposer.StyleOptions.Select(s =>
+        {
+            var disabled = weakOrDrag && s.HighRisk;
+            if (weakOrDrag && styleAllowed.All(a => a.Id != s.Id))
+                disabled = true;
+            return new NextDayThemeStyleChipDto(
+                s.Id, s.Label, s.Phrase, s.Recommended, s.HighRisk, s.RequiresSector, disabled);
+        }).ToList();
+
+        var hitMap = themes.ToDictionary(
+            t => t.Theme, t => t, StringComparer.OrdinalIgnoreCase);
+
+        NextDayThemeChipDto Chip(string theme, string kind)
+        {
+            hitMap.TryGetValue(theme, out var st);
+            return new NextDayThemeChipDto(
+                theme,
+                st?.SampleSize ?? 0,
+                st?.DirectionHitRatePct,
+                kind);
+        }
+
+        var recommended = new List<NextDayThemeChipDto>();
+        // 风格实证优先
+        foreach (var s in new[] { "超跌反弹", "持续放量", "低位企稳" })
+        {
+            if (hitMap.TryGetValue(s, out var st) && st.DirectionHitRatePct >= 45m)
+                recommended.Add(Chip(s, "style"));
+            else if (s == "超跌反弹")
+                recommended.Add(Chip(s, "style"));
+        }
+
+        // 历史高命中题材（非弱、非空心）
+        foreach (var t in themes
+                     .Where(x => x.SampleSize >= 2
+                                 && x.DirectionHitRatePct >= 55m
+                                 && !NextDayPickGuard.IsVagueThemeSlogan(x.Theme)
+                                 && NextDayPickGuard.ClassifyTheme(x.Theme) != NextDayThemeClass.NarrativeBlocked)
+                     .OrderByDescending(x => x.DirectionHitRatePct)
+                     .ThenByDescending(x => x.SampleSize)
+                     .Take(6))
+        {
+            if (recommended.Any(r => r.Theme.Equals(t.Theme, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            recommended.Add(Chip(t.Theme, "history"));
+        }
+
+        // 结构化示例芯片
+        foreach (var sample in new[] { "半导体超跌反弹", "电网设备持续放量", "医药低位企稳" })
+        {
+            if (recommended.Count >= 8) break;
+            if (recommended.Any(r => r.Theme.Equals(sample, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            recommended.Add(Chip(sample, "template"));
+        }
+
+        var caution = themes
+            .Where(t => t.SampleSize >= 2
+                        && (t.DirectionHitRatePct < thresholds.ThemeHitRateFloorPct
+                            || NextDayPickGuard.IsVagueThemeSlogan(t.Theme)
+                            || NextDayPickGuard.ClassifyTheme(t.Theme) == NextDayThemeClass.NarrativeBlocked))
+            .OrderBy(t => t.DirectionHitRatePct)
+            .Take(6)
+            .Select(t => Chip(t.Theme, "caution"))
+            .ToList();
+
+        // 保证空心/叙事出现在慎用区
+        foreach (var bad in new[] { "有重大利好", "有利好，持续放量", "有利好" })
+        {
+            if (caution.Any(c => c.Theme.Equals(bad, StringComparison.OrdinalIgnoreCase))) continue;
+            caution.Add(Chip(bad, "caution"));
+        }
+
+        var note = weakOrDrag
+            ? $"弱市/高 MarketDrag 模式：禁用重大利好；推荐超跌反弹或板块+放量"
+                + (index1d is { } i ? $"（指数近1日 {i:N2}%）" : "")
+            : index1d is { } i2
+                ? $"指数近1日 {i2:N2}%；点选推荐芯片或三块组装题材"
+                : "点选推荐芯片或三块组装题材；避免空心「有利好」口号";
+
+        return new NextDayThemeComposerCatalogDto(
+            NextDayThemeComposer.SectorOptions,
+            styleChips,
+            NextDayThemeComposer.CatalystOptions,
+            recommended,
+            caution,
+            hints.DownweightThemes.Take(8).ToList(),
+            weakOrDrag,
+            note);
+    }
+
     /// <summary>
     /// 对 AI 建议列表做过滤。
     /// strict=false（选股落库）：路径硬拦 + 叙事/hints；并写回 IsHardRejected 供 UI 灰显。
@@ -283,10 +398,18 @@ public sealed class NextDayPickFilterAppService
         var industryCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var asOf = DateTime.Today;
 
+        var index1d = NextDayPickGuard.TryIndexReturn1d(index, asOf);
+        var weakMarketDay = NextDayPickGuard.IsWeakMarketDay(index1d, thresholds);
+        var weakOrDrag = weakMarketDay || thresholds.PreferAbsoluteDirection;
+
         var themeClass = NextDayPickGuard.ClassifyTheme(goal.ThemePreference);
-        if (themeClass == NextDayThemeClass.NarrativeBlocked)
+        // 弱市/高拖累：空心口号升级为整批硬拦
+        if (themeClass == NextDayThemeClass.NarrativeBlocked
+            || (weakOrDrag && NextDayPickGuard.IsVagueThemeSlogan(goal.ThemePreference)))
         {
-            var note = $"题材「{goal.ThemePreference}」为纯叙事（无放量/超跌约束），整批不可入库";
+            var note = themeClass == NextDayThemeClass.NarrativeBlocked
+                ? $"题材「{goal.ThemePreference}」为纯叙事（无放量/超跌约束），整批不可入库"
+                : $"弱市下空心题材「{goal.ThemePreference}」整批不可入库，请改用板块+超跌反弹/持续放量";
             foreach (var s in suggestions.Where(x => !string.IsNullOrWhiteSpace(x.Symbol)))
                 MarkReject(s, note, rejected);
             return (Array.Empty<AiSuggestion>(), rejected);
@@ -307,10 +430,8 @@ public sealed class NextDayPickFilterAppService
             confidenceFloor = Math.Max(confidenceFloor, 0.65m);
         }
 
-        var index1d = NextDayPickGuard.TryIndexReturn1d(index, asOf);
-        var weakMarketDay = NextDayPickGuard.IsWeakMarketDay(index1d, thresholds);
         var maxPicks = thresholds.MaxPicksPerBatch;
-        if (weakMarketDay || thresholds.PreferAbsoluteDirection)
+        if (weakOrDrag)
         {
             confidenceFloor = Math.Max(confidenceFloor, 0.65m);
             maxPicks = Math.Min(maxPicks, NextDayPickGuard.WeakMarketMaxPicksPerBatch);

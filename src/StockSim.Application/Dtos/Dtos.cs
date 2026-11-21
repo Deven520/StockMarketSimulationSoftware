@@ -400,7 +400,37 @@ public record CreateInvestmentGoalRequest(
     decimal ExpectedReturnPct,
     int HorizonDays,
     string ThemePreference,
-    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT);
+    StockTradeStyle TradeStyle = StockTradeStyle.IntradayT,
+    string? ThemeSector = null,
+    string? ThemeStyle = null,
+    string? ThemeCatalyst = null,
+    bool AcceptThemeRewrite = false);
+
+/// <summary>次日预涨题材三块选择器目录（含命中率芯片）。</summary>
+public record NextDayThemeComposerCatalogDto(
+    IReadOnlyList<string> Sectors,
+    IReadOnlyList<NextDayThemeStyleChipDto> Styles,
+    IReadOnlyList<string> Catalysts,
+    IReadOnlyList<NextDayThemeChipDto> RecommendedChips,
+    IReadOnlyList<NextDayThemeChipDto> CautionChips,
+    IReadOnlyList<string> DownweightThemes,
+    bool WeakOrDragHeavy,
+    string? MarketNote);
+
+public record NextDayThemeStyleChipDto(
+    string Id,
+    string Label,
+    string Phrase,
+    bool Recommended,
+    bool HighRisk,
+    bool RequiresSector,
+    bool Disabled);
+
+public record NextDayThemeChipDto(
+    string Theme,
+    int SampleSize,
+    decimal? DirectionHitRatePct,
+    string Kind);
 
 public record InvestmentGoalDto(
     Guid Id,

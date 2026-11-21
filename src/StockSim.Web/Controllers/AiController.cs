@@ -35,6 +35,7 @@ public class AiController : Controller
         ViewBag.CursorStatus = await _ai.GetCursorConnectionStatusAsync(ct);
         ViewBag.Goals = await _goals.ListAsync(ct);
         ViewBag.QueueCounts = await _queue.CountByStatusAsync(ct);
+        ViewBag.ThemeCatalog = await _goals.GetThemeComposerCatalogAsync(ct);
         var jobs = (await _ai.ListJobsAsync(ct))
             .Where(x => x.JobType == AiJobType.StockPick)
             .ToList();
@@ -46,18 +47,30 @@ public class AiController : Controller
     public async Task<IActionResult> CreateGoal(
         decimal expectedReturnPct,
         int horizonDays,
-        string themePreference,
+        string? themePreference,
         StockTradeStyle tradeStyle = StockTradeStyle.IntradayT,
+        string? themeSector = null,
+        string? themeStyle = null,
+        string? themeCatalyst = null,
+        bool acceptThemeRewrite = false,
         CancellationToken ct = default)
     {
         try
         {
             var (goal, job, queueId) = await _goals.CreateGoalAndPickAsync(
-                new CreateInvestmentGoalRequest(expectedReturnPct, horizonDays, themePreference, tradeStyle), ct);
-            var msg = $"已提交 AI 队列（任务 {queueId.ToString()[..8]}…）。完成后可在选股结果中勾选入库。";
+                new CreateInvestmentGoalRequest(
+                    expectedReturnPct,
+                    horizonDays,
+                    themePreference ?? "",
+                    tradeStyle,
+                    themeSector,
+                    themeStyle,
+                    themeCatalyst,
+                    acceptThemeRewrite), ct);
+            var msg = $"已提交 AI 队列（任务 {queueId.ToString()[..8]}…）。题材「{goal.ThemePreference}」。完成后可在选股结果中勾选入库。";
             if (tradeStyle == StockTradeStyle.NextDayRise)
             {
-                var hint = NextDayPickGuard.ThemeClassHint(NextDayPickGuard.ClassifyTheme(themePreference));
+                var hint = NextDayPickGuard.ThemeClassHint(NextDayPickGuard.ClassifyTheme(goal.ThemePreference));
                 if (!string.IsNullOrWhiteSpace(hint))
                     msg += " " + hint;
             }

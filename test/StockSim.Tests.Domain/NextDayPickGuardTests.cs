@@ -161,4 +161,40 @@ public class NextDayPickGuardTests
         Assert.True(NextDayPickGuard.TryParseConfidence("""{"confidence":"80"}""", out var p));
         Assert.Equal(0.8m, p);
     }
+
+    [Fact]
+    public void ThemeComposer_Compose_Sector_Plus_Style()
+    {
+        Assert.Equal("半导体超跌反弹", NextDayThemeComposer.Compose("半导体", "oversold", "无"));
+        Assert.Equal("电网设备持续放量", NextDayThemeComposer.Compose("电网设备", "volume", null));
+        Assert.Equal("医药低位企稳+订单", NextDayThemeComposer.Compose("医药", "stabilize", "订单"));
+        Assert.Equal("超跌反弹", NextDayThemeComposer.Compose(null, "oversold", null));
+        Assert.Throws<ArgumentException>(() => NextDayThemeComposer.Compose(null, "volume", null));
+        Assert.Throws<ArgumentException>(() => NextDayThemeComposer.Compose(null, "heavy_news", null));
+    }
+
+    [Fact]
+    public void ThemeComposer_Rewrite_Vague_And_Normalize()
+    {
+        var sug = NextDayThemeComposer.TrySuggestRewrite("有利好，持续放量");
+        Assert.NotNull(sug);
+        Assert.Equal("超跌反弹", sug!.Preferred);
+
+        Assert.Throws<ArgumentException>(() =>
+            NextDayThemeComposer.NormalizeForNextDay("有重大利好", null, null, null, acceptRewrite: false, weakOrDragHeavy: false));
+
+        var rewritten = NextDayThemeComposer.NormalizeForNextDay(
+            "有重大利好", null, null, null, acceptRewrite: true, weakOrDragHeavy: false);
+        Assert.True(rewritten.Rewritten);
+        Assert.Equal("超跌反弹", rewritten.Theme);
+
+        Assert.Throws<ArgumentException>(() =>
+            NextDayThemeComposer.NormalizeForNextDay(
+                "有利好，持续放量", null, null, null, acceptRewrite: false, weakOrDragHeavy: true));
+
+        var composed = NextDayThemeComposer.NormalizeForNextDay(
+            null, "半导体", "oversold", null, acceptRewrite: false, weakOrDragHeavy: true);
+        Assert.Equal("半导体超跌反弹", composed.Theme);
+        Assert.Equal(NextDayThemeClass.Ok, composed.ThemeClass);
+    }
 }
