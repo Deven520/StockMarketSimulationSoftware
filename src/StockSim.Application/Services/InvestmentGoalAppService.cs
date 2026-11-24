@@ -383,6 +383,22 @@ public class InvestmentGoalAppService
             ? queueItem.InputPayload!
             : (goal.GeneratedPrompt ?? BuildFallbackPrompt(goal));
 
+        // 次日预涨：注入可计算硬门槛，扩大候选池，避免 AI 散文约束过不了预检
+        if (goal.TradeStyle == StockTradeStyle.NextDayRise)
+        {
+            try
+            {
+                var (_, _, gates) = await _nextDayPickFilter.GetHardGatesClauseAsync(
+                    goal.ThemePreference, ct);
+                if (!prompt.Contains("可计算硬门槛", StringComparison.Ordinal))
+                    prompt = prompt.TrimEnd() + "\n\n" + gates;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Hard gates clause unavailable for goal {GoalId}", goal.Id);
+            }
+        }
+
         job.Status = AiJobStatus.Running;
         job.Prompt = prompt;
         await _db.SaveChangesAsync(ct);
@@ -390,7 +406,7 @@ public class InvestmentGoalAppService
         try
         {
             var output = await _ai.RunStockPickAsync(prompt, job.InputPayload, ct);
-            // 选股阶段不过硬过滤；入库勾选时再过滤。先落库候选，避免解析后半步异常导致整单失败。
+            // 选股阶段先落库候选，再预检；入库勾选时 strict。
             var count = ApplyStockPickOutput(job, output, _db);
             await _db.SaveChangesAsync(ct);
 
@@ -435,11 +451,69 @@ public class InvestmentGoalAppService
                     var all = await _db.AiSuggestions.Where(s => s.AiJobId == job.Id).ToListAsync(ct);
                     var (accepted, notes) = await _nextDayPickFilter.FilterSuggestionsAsync(
                         goal, all, strict: false, ct: ct);
-                    // 写回 IsHardRejected，UI 灰显不可勾选；Accepted 仅作摘要
-                    if (notes.Count > 0)
+                    var passCount = all.Count(s => !s.IsHardRejected);
+                    // 通过 &lt;2：先建硬门槛预筛池，再让 AI 只在池内排序（避免再猜一轮）
+                    if (passCount < 2)
+                    {
+                        _logger.LogInformation(
+                            "NextDay preview pass {Pass}/{Total} for goal {GoalId}, pool-ranked retry",
+                            passCount, all.Count, goal.Id);
+
+                        var extras = all
+                            .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
+                            .Select(s => (s.Symbol!, s.Name ?? ""))
+                            .ToList();
+                        // 再并入池内近期标的扩大种子
+                        var poolExtras = await _db.StockPoolItems.AsNoTracking()
+                            .OrderByDescending(x => x.CreationTime)
+                            .Take(40)
+                            .Select(x => new { x.Symbol, x.Name })
+                            .ToListAsync(ct);
+                        foreach (var p in poolExtras)
+                            extras.Add((p.Symbol, p.Name));
+
+                        var seedPool = await _nextDayPickFilter.BuildPassingSeedPoolAsync(
+                            goal.ThemePreference, extras, maxTake: 24, ct);
+                        string retryPrompt;
+                        if (seedPool.Count >= 2)
+                        {
+                            retryPrompt = BuildPoolRankRetryPrompt(goal, prompt, notes, all, seedPool);
+                            job.AnalysisSummary = (job.AnalysisSummary ?? "") +
+                                                  $"\n【池内重选】硬门槛预筛通过 {seedPool.Count} 只，交 AI 排序";
+                        }
+                        else
+                        {
+                            retryPrompt = BuildRejectAwareRetryPrompt(goal, prompt, notes, all);
+                            job.AnalysisSummary = (job.AnalysisSummary ?? "") +
+                                                  "\n【拒因重试】预筛池不足，回退拒因提示重试";
+                        }
+
+                        job.Prompt = retryPrompt;
+                        output = await _ai.RunStockPickAsync(retryPrompt, job.InputPayload, ct);
+                        queueItem.OutputPayload = output;
+                        var old2 = await _db.AiSuggestions.Where(s => s.AiJobId == job.Id).ToListAsync(ct);
+                        _db.AiSuggestions.RemoveRange(old2);
+                        ApplyStockPickOutput(job, output, _db);
+                        await _db.SaveChangesAsync(ct);
+
+                        all = await _db.AiSuggestions.Where(s => s.AiJobId == job.Id).ToListAsync(ct);
+                        (accepted, notes) = await _nextDayPickFilter.FilterSuggestionsAsync(
+                            goal, all, strict: false, ct: ct);
+                        passCount = all.Count(s => !s.IsHardRejected);
+                        job.AnalysisSummary += $"；重试后预检通过 {passCount}/{all.Count}；" +
+                                               string.Join("；", notes.Take(6));
+                    }
+                    else if (notes.Count > 0 || accepted.Count < all.Count)
+                    {
                         job.AnalysisSummary = (job.AnalysisSummary ?? "") +
-                                              $"\n【硬过滤预检】通过 {accepted.Count}/{all.Count}；" +
+                                              $"\n【硬过滤预检】通过 {passCount}/{all.Count}；" +
                                               string.Join("；", notes.Take(6));
+                    }
+                    else
+                    {
+                        job.AnalysisSummary = (job.AnalysisSummary ?? "") +
+                                              $"\n【硬过滤预检】通过 {passCount}/{all.Count}";
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -957,7 +1031,7 @@ public class InvestmentGoalAppService
                     : ""));
             parts.Add(
                 "items 必须含 symbol,name,reason,risk，并尽量含 thesis,catalystType,confidence(0-1),invalidation；" +
-                "弱市日可少于 3 只但禁止空 items；非弱市输出 3～5 只具体代码，禁止只写分析不给 items。");
+                "弱市日可少于 3 只但禁止空 items；非弱市请输出 8～10 只具体代码（预检会砍一截，目标留 2～4 只），禁止只写分析不给 items。");
         }
         else if (goal.TradeStyle == StockTradeStyle.TrendSwing)
         {
@@ -985,11 +1059,11 @@ public class InvestmentGoalAppService
         if (goal.TradeStyle == StockTradeStyle.NextDayRise)
         {
             return
-                $"请推荐 3~5 只下一交易日更可能上涨的具体 A 股（必须含 6 位代码与简称）。" +
+                $"请推荐 8~10 只下一交易日更可能上涨的具体 A 股（必须含 6 位代码与简称；预检后目标留 2～4 只）。" +
                 $"题材偏好「{goal.ThemePreference}」；隔日温和目标约 {goal.ExpectedReturnPct}%（≤{NextDayPickGuard.MaxExpectedReturnPct}%）；" +
-                "主目标：绝对收涨且相对创业板指不弱；必须消化 nextDayPickCalibration（弱题材/pickHints/错因 Top/弱市闸门/阈值）与 recentNextDayPickReviews；" +
+                "主目标：绝对收涨且相对创业板指不弱；必须消化 nextDayPickCalibration 与可计算硬门槛；" +
                 "禁止纯「重大利好」叙事催化；排除 ST、明显追高与极弱相对强弱；同行业≤阈值；" +
-                "指数弱日宁缺毋滥（可少于3只但禁止空 items）；非弱市输出 3～5 只；" +
+                "指数弱日宁缺毋滥（可少于3只但禁止空 items）；" +
                 "字段含 symbol,name,reason,risk，并尽量含 thesis,catalystType,confidence,invalidation；" +
                 "返回 JSON：analysis、items[{symbol,name,reason,risk,thesis,catalystType,confidence,invalidation}]。";
         }
@@ -1051,6 +1125,57 @@ public class InvestmentGoalAppService
         BuildFallbackPrompt(goal) +
         "\n\n（系统重试）上一轮未返回 items 股票列表。请忽略任何「不要输出代码」的表述，必须输出具体代码。" +
         "\n参考约束摘要：\n" + Truncate(previousPrompt, 800);
+
+    /// <summary>预检几乎全灭时：把拒因喂回 AI，要求换一批对准硬门槛的代码。</summary>
+    private static string BuildRejectAwareRetryPrompt(
+        InvestmentGoal goal,
+        string previousPrompt,
+        IReadOnlyList<string> rejectNotes,
+        IReadOnlyList<AiSuggestion> failed)
+    {
+        var lines = failed
+            .Where(s => s.IsHardRejected && !string.IsNullOrWhiteSpace(s.Symbol))
+            .Select(s => $"{s.Symbol} {s.Name}: {s.FilterRejectReason}")
+            .Take(12)
+            .ToList();
+        if (lines.Count == 0 && rejectNotes.Count > 0)
+            lines = rejectNotes.Take(12).ToList();
+
+        return BuildFallbackPrompt(goal) +
+               "\n\n（系统拒因重试）上一轮候选几乎全部未过真源日K硬过滤预检，等于白选。" +
+               "请勿重复下列代码或其同质弱 RS/低流动性/追高形态；换一批明确满足硬门槛的 8～10 只：" +
+               "\n" + string.Join("\n", lines.Select(x => "- " + x)) +
+               "\n约束摘要：\n" + Truncate(previousPrompt, 1000);
+    }
+
+    /// <summary>硬门槛预筛池内排序：AI 只能从已过检代码中挑 3～5 只并写理由。</summary>
+    private static string BuildPoolRankRetryPrompt(
+        InvestmentGoal goal,
+        string previousPrompt,
+        IReadOnlyList<string> rejectNotes,
+        IReadOnlyList<AiSuggestion> failed,
+        IReadOnlyList<NextDayPickFilterAppService.NextDaySeedPassDto> pool)
+    {
+        var failedSyms = string.Join("、", failed
+            .Where(s => s.IsHardRejected && !string.IsNullOrWhiteSpace(s.Symbol))
+            .Select(s => s.Symbol)
+            .Take(10));
+        var poolLines = pool.Select(p =>
+        {
+            var rs = p.Rs5dPct.HasValue ? $"RS5={p.Rs5dPct:0.##}%" : "RS5=?";
+            var soft = string.IsNullOrWhiteSpace(p.SoftNote) ? "" : $"（{p.SoftNote}）";
+            return $"- {p.Symbol} {p.Name} | {rs}{soft}";
+        });
+
+        return
+            $"题材「{goal.ThemePreference}」，次日预涨池内重选。" +
+            "下列代码已通过系统真源日K硬门槛预筛（非弱市不强制 RS≥1.5%；流动性预检≥约4000万）。" +
+            "你只能从下列池中选 3～5 只（优先 RS5 更高、无 Soft 标注），写清次日逻辑；禁止输出池外代码。" +
+            (string.IsNullOrWhiteSpace(failedSyms) ? "" : $"\n上轮未过检请勿再推：{failedSyms}") +
+            "\n【已过检候选池】\n" + string.Join("\n", poolLines) +
+            "\n返回 JSON：analysis、items[{symbol,name,reason,risk,thesis,catalystType,confidence,invalidation}]。" +
+            "\n约束摘要：\n" + Truncate(previousPrompt, 600);
+    }
 
     private static string Truncate(string? s, int n)
     {

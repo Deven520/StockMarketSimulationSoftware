@@ -174,6 +174,85 @@ public class NextDayPickGuardTests
     }
 
     [Fact]
+    public void MeanReversion_Theme_Relaxes_Sticky_PreferAbsolute()
+    {
+        Assert.True(NextDayPickGuard.IsMeanReversionTheme("低位企稳"));
+        Assert.True(NextDayPickGuard.IsMeanReversionTheme("半导体超跌反弹"));
+        Assert.False(NextDayPickGuard.IsMeanReversionTheme("电网设备持续放量"));
+
+        var sticky = NextDayPickThresholds.Default with
+        {
+            PreferAbsoluteDirection = true,
+            WeakMarketMinRs5dPct = 1.5m,
+            WeakRelative5dThresholdPct = -1.0m
+        };
+
+        var calm = NextDayPickGuard.AdjustForThemeAndSession(sticky, "低位企稳", weakMarketDay: false);
+        Assert.False(calm.PreferAbsoluteDirection);
+        Assert.Equal(-4.0m, calm.WeakRelative5dThresholdPct);
+
+        var weak = NextDayPickGuard.AdjustForThemeAndSession(sticky, "超跌反弹", weakMarketDay: true);
+        Assert.False(weak.PreferAbsoluteDirection);
+        Assert.Equal(0m, weak.WeakMarketMinRs5dPct);
+
+        var volume = NextDayPickGuard.AdjustForThemeAndSession(sticky, "电网设备持续放量", weakMarketDay: false);
+        Assert.False(volume.PreferAbsoluteDirection); // 非弱市取消粘滞 PreferAbsolute
+        Assert.Equal(1.5m, volume.WeakMarketMinRs5dPct); // 校准值保留，仅弱市日启用
+
+        var volumeWeak = NextDayPickGuard.AdjustForThemeAndSession(sticky, "电网设备持续放量", weakMarketDay: true);
+        Assert.True(volumeWeak.PreferAbsoluteDirection);
+
+        var seeds = NextDayPickGuard.ResolveSectorSeedSymbols("电网设备持续放量");
+        Assert.Contains(seeds, s => s.Symbol == "600406");
+
+        var gates = NextDayPickGuard.FormatHardGatesForPrompt(calm, "低位企稳", weakMarketDay: false);
+        Assert.Contains("可计算硬门槛", gates);
+        Assert.Contains("8～10", gates);
+    }
+
+    [Fact]
+    public void Preview_SoftLiquidity_Still_Checks_Path()
+    {
+        var bars = new List<DailyBar>();
+        var d0 = new DateTime(2026, 11, 1);
+        for (var i = 0; i < 10; i++)
+        {
+            bars.Add(new DailyBar
+            {
+                Date = d0.AddDays(i),
+                Open = 10, High = 10.2m, Low = 9.8m, Close = 10m + i * 0.01m,
+                Amount = 45_000_000m
+            });
+        }
+
+        var detail = new StockDetailBundle
+        {
+            Board = new StockQuoteBoard
+            {
+                Symbol = "000001", Name = "测", Last = 10.1m, Open = 10, High = 10.2m,
+                Low = 9.9m, PreClose = 10, Change = 0.1m, ChangePercent = 1,
+                Volume = 1, Amount = 45_000_000m, TurnoverRate = 1, AsOf = DateTime.Now
+            },
+            Fundamentals = new StockFundamentals(),
+            FundFlow = new FundFlowSnapshot(),
+            DailyBars = bars,
+            MinuteBars = Array.Empty<MinuteBar>(),
+            IsSimulated = false
+        };
+
+        var preview = NextDayPickThresholds.Default with
+        {
+            MinAmountYuan = NextDayPickGuard.PreviewMinAmountYuan,
+            SoftLiquidityReject = true,
+            PreferAbsoluteDirection = false,
+            WeakRelative5dThresholdPct = -4m
+        };
+        var v = NextDayPickGuard.EvaluateLiquidityAndPath(detail, null, preview, bars[^1].Date);
+        // 无指数时不做 RS 硬拦；成交额 45M ≥ 40M 预检下限 → 应 Pass
+        Assert.True(v.Accepted);
+    }
+
+    [Fact]
     public void ThemeComposer_Rewrite_Vague_And_Normalize()
     {
         var sug = NextDayThemeComposer.TrySuggestRewrite("有利好，持续放量");

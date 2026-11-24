@@ -235,9 +235,128 @@ public sealed class NextDayPickFilterAppService
                 "入库硬过滤：confidence≥阈值；须有 invalidation；追高/5日相对弱势/弱市门控/流动性；" +
                 "同行业一批最多 MaxSameThemePerBatch；弱命中/叙事题材须更强催化剂否则剔除；" +
                 "须硬消化 pickHints.downweightThemes（含板块别名）/ 可执行 avoidPatterns；" +
-                "弱市日优先绝对方向+相对强弱双达标，禁止硬凑。"
+                "弱市日优先绝对方向+相对强弱双达标，禁止硬凑。" +
+                "超跌/企稳题材：不套用历史 PreferAbsolute 的 RS≥1.5% 永久门控（非弱市日），请按 FormatHardGates 数值输出 8～10 候选。"
         };
     }
+
+    /// <summary>当前校准 + 题材/弱市调整后的硬门槛文案（供选股提示词）。</summary>
+    public async Task<(NextDayPickThresholds Thresholds, bool WeakMarketDay, string HardGatesClause)>
+        GetHardGatesClauseAsync(string? themePreference, CancellationToken ct = default)
+    {
+        var thresholds = await GetCalibratedThresholdsAsync(ct);
+        StockDetailBundle? index = null;
+        try
+        {
+            index = await _details.GetDetailAsync(
+                NextDayPickReviewAppService.IndexSymbol, "创业板指", ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Index unavailable for hard gates");
+        }
+
+        var index1d = NextDayPickGuard.TryIndexReturn1d(index, DateTime.Today);
+        var weak = NextDayPickGuard.IsWeakMarketDay(index1d, thresholds);
+        thresholds = NextDayPickGuard.AdjustForThemeAndSession(
+            thresholds, themePreference, weak, preview: true);
+        var clause = NextDayPickGuard.FormatHardGatesForPrompt(thresholds, themePreference, weak);
+        if (index1d is { } i)
+            clause += $"（指数近1日 {i:N2}%{(weak ? "，弱市" : "")}；非弱市不启用 RS≥1.5% 粘滞门控）";
+        return (thresholds, weak, clause);
+    }
+
+    /// <summary>
+    /// 用板块种子 + 附加代码做真源日K预筛，返回已过硬门槛的池（供 AI 池内重选）。
+    /// </summary>
+    public async Task<IReadOnlyList<NextDaySeedPassDto>> BuildPassingSeedPoolAsync(
+        string? themePreference,
+        IEnumerable<(string Symbol, string Name)>? extraCandidates = null,
+        int maxTake = 24,
+        CancellationToken ct = default)
+    {
+        var thresholds = await GetCalibratedThresholdsAsync(ct);
+        StockDetailBundle? index = null;
+        try
+        {
+            index = await _details.GetDetailAsync(
+                NextDayPickReviewAppService.IndexSymbol, "创业板指", ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Index unavailable for seed pool");
+        }
+
+        var asOf = DateTime.Today;
+        var index1d = NextDayPickGuard.TryIndexReturn1d(index, asOf);
+        var weak = NextDayPickGuard.IsWeakMarketDay(index1d, thresholds);
+        thresholds = NextDayPickGuard.AdjustForThemeAndSession(
+            thresholds, themePreference, weak, preview: true);
+
+        var candidates = new List<(string Symbol, string Name)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in NextDayPickGuard.ResolveSectorSeedSymbols(themePreference))
+        {
+            if (seen.Add(s.Symbol))
+                candidates.Add(s);
+        }
+
+        if (extraCandidates is not null)
+        {
+            foreach (var e in extraCandidates)
+            {
+                if (string.IsNullOrWhiteSpace(e.Symbol)) continue;
+                if (seen.Add(e.Symbol.Trim()))
+                    candidates.Add((e.Symbol.Trim(), e.Name ?? ""));
+            }
+        }
+
+        var passed = new List<NextDaySeedPassDto>();
+        foreach (var (symbol, name) in candidates)
+        {
+            if (passed.Count >= maxTake) break;
+            StockDetailBundle? detail = null;
+            try
+            {
+                detail = await _details.GetDetailAsync(symbol, name, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Seed detail failed {Symbol}", symbol);
+            }
+
+            var verdict = NextDayPickGuard.EvaluateLiquidityAndPath(
+                detail, index, thresholds, asOf);
+            // 严格失败跳过；SoftSkip（多为流动性偏弱但强弱过关）可进池
+            if (!verdict.Accepted && !verdict.SoftSkip)
+                continue;
+            if (!verdict.Accepted && verdict.SoftSkip
+                && !(verdict.Reason?.Contains("流动性", StringComparison.Ordinal) ?? false))
+                continue;
+
+            var displayName = !string.IsNullOrWhiteSpace(detail?.Board?.Name)
+                ? detail!.Board!.Name
+                : name;
+            passed.Add(new NextDaySeedPassDto(
+                symbol,
+                displayName ?? symbol,
+                verdict.Rs5dPct,
+                verdict.Stock5dPct,
+                !verdict.Accepted ? verdict.Reason : null));
+        }
+
+        return passed
+            .OrderByDescending(p => p.Rs5dPct ?? -999m)
+            .Take(maxTake)
+            .ToList();
+    }
+
+    public sealed record NextDaySeedPassDto(
+        string Symbol,
+        string Name,
+        decimal? Rs5dPct,
+        decimal? Stock5dPct,
+        string? SoftNote);
 
     /// <summary>Goals 页三块选择器 + 命中率芯片目录。</summary>
     public async Task<NextDayThemeComposerCatalogDto> GetThemeComposerCatalogAsync(CancellationToken ct = default)
@@ -400,6 +519,10 @@ public sealed class NextDayPickFilterAppService
 
         var index1d = NextDayPickGuard.TryIndexReturn1d(index, asOf);
         var weakMarketDay = NextDayPickGuard.IsWeakMarketDay(index1d, thresholds);
+        // 非弱市关掉 PreferAbsolute 粘滞；预检放宽流动性
+        thresholds = NextDayPickGuard.AdjustForThemeAndSession(
+            thresholds, goal.ThemePreference, weakMarketDay, preview: !strict);
+        var meanReversion = NextDayPickGuard.IsMeanReversionTheme(goal.ThemePreference);
         var weakOrDrag = weakMarketDay || thresholds.PreferAbsoluteDirection;
 
         var themeClass = NextDayPickGuard.ClassifyTheme(goal.ThemePreference);
@@ -542,15 +665,21 @@ public sealed class NextDayPickFilterAppService
                 }
             }
 
-            // 弱市/高 MarketDrag：要求绝对偏强 + 相对不弱（stock5d 不可显著为负）
+            // 弱市/绝对方向：非均值回归题材要求近5日绝对不显著为负；超跌/企稳仅拦深跌
             if ((weakMarketDay || thresholds.PreferAbsoluteDirection)
-                && verdict.Stock5dPct is < 0m
+                && verdict.Stock5dPct is { } s5
                 && (strict || weakMarketDay || thresholds.PreferAbsoluteDirection))
             {
-                MarkReject(s,
-                    $"{s.Symbol} 弱市闸门：近5日绝对偏弱（{verdict.Stock5dPct:0.##}%），优先绝对收涨候选",
-                    rejected);
-                continue;
+                var floor5d = meanReversion ? -6.0m : 0m;
+                if (s5 < floor5d)
+                {
+                    MarkReject(s,
+                        meanReversion
+                            ? $"{s.Symbol} 企稳题材闸门：近5日绝对过弱（{s5:0.##}% &lt; {floor5d:0.#}%）"
+                            : $"{s.Symbol} 弱市闸门：近5日绝对偏弱（{s5:0.##}%），优先绝对收涨候选",
+                        rejected);
+                    continue;
+                }
             }
 
             if ((weakMarketDay || thresholds.PreferAbsoluteDirection)
@@ -609,26 +738,11 @@ public sealed class NextDayPickFilterAppService
             accepted.Add(s);
         }
 
-        // 选股阶段：若行情硬过滤杀光，回退保留前 3 只（避免队列失败），并注明
+        // 选股阶段：全灭时不再假「通过」；保留拒因供上层拒因重试 / 强制入库
         if (!strict && accepted.Count == 0 && suggestions.Count > 0)
         {
-            var fallback = suggestions
-                .Where(s => !string.IsNullOrWhiteSpace(s.Symbol))
-                .Take(3)
-                .ToList();
-            if (fallback.Count > 0)
-            {
-                foreach (var s in fallback)
-                {
-                    s.IsHardRejected = true;
-                    s.FilterRejectReason = (s.FilterRejectReason ?? "硬过滤未通过") + "（空窗回退保留，入库仍严格校验）";
-                }
-
-                rejected.Add(
-                    "硬过滤后无剩余，已回退保留前 " + fallback.Count +
-                    " 只供人工甄别（默认不可勾选入库，需强制确认）");
-                return (fallback, rejected);
-            }
+            rejected.Insert(0,
+                $"硬过滤后通过 0/{suggestions.Count} 只（非假通过）；将触发拒因重试或需强制入库");
         }
 
         return (accepted, rejected);

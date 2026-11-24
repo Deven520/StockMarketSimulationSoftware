@@ -42,8 +42,10 @@ public static class NextDayPickGuard
     /// <summary>题材历史方向命中率低于该值 → 降权/需更强催化剂。</summary>
     public const decimal ThemeHitRateFloorPct = 40.0m;
 
-    /// <summary>日成交额下限（元），过低视为流动性陷阱。</summary>
-    public const decimal MinAmountYuan = 80_000_000m;
+    /// <summary>入库硬校验日成交额下限（元）。</summary>
+    public const decimal MinAmountYuan = 50_000_000m;
+    /// <summary>预检日成交额下限（元）；低于此仍硬拦，50～原 8000 万区间可过预检。</summary>
+    public const decimal PreviewMinAmountYuan = 40_000_000m;
 
     /// <summary>题材结构化分级：纯叙事拦截 / 弱约束抬门槛 / 正常。</summary>
     public static NextDayThemeClass ClassifyTheme(string? theme)
@@ -96,6 +98,85 @@ public static class NextDayPickGuard
     public static bool RequiresVolumeSurge(string? theme) =>
         !string.IsNullOrWhiteSpace(theme)
         && ContainsAny(theme, "放量", "量能", "持续放量");
+
+    /// <summary>均值回归类题材（超跌/企稳）：与「须已相对强势」硬门控冲突，需题材感知放宽。</summary>
+    public static bool IsMeanReversionTheme(string? theme) =>
+        !string.IsNullOrWhiteSpace(theme)
+        && ContainsAny(theme, "超跌", "反弹", "低位", "企稳", "底部", "低估");
+
+    /// <summary>
+    /// 按题材与当日是否弱市调整阈值：
+    /// 非弱市日一律关掉历史 MarketDrag 粘滞的 PreferAbsolute（RS≥1.5% 仅当日弱市生效）；
+    /// 企稳/超跌再放宽相对弱势底；预检可软处理流动性。
+    /// </summary>
+    public static NextDayPickThresholds AdjustForThemeAndSession(
+        NextDayPickThresholds t,
+        string? theme,
+        bool weakMarketDay,
+        bool preview = false)
+    {
+        // 非弱市：禁止用近周 MarketDrag 永久加码 PreferAbsolute
+        if (!weakMarketDay)
+            t = t with { PreferAbsoluteDirection = false };
+
+        if (IsMeanReversionTheme(theme))
+        {
+            if (!weakMarketDay)
+            {
+                t = t with
+                {
+                    // 允许明显弱于指数（题材本身找超跌/企稳），仍拦极弱
+                    WeakRelative5dThresholdPct = Math.Min(t.WeakRelative5dThresholdPct, -4.0m)
+                };
+            }
+            else
+            {
+                t = t with
+                {
+                    PreferAbsoluteDirection = false,
+                    WeakMarketMinRs5dPct = 0m,
+                    WeakRelative5dThresholdPct = Math.Min(t.WeakRelative5dThresholdPct, -4.0m)
+                };
+            }
+        }
+
+        if (preview)
+        {
+            t = t with
+            {
+                MinAmountYuan = PreviewMinAmountYuan,
+                SoftLiquidityReject = true
+            };
+        }
+
+        return t;
+    }
+
+    /// <summary>写入选股提示词的可计算硬门槛（避免 AI 只收到散文约束）。</summary>
+    public static string FormatHardGatesForPrompt(
+        NextDayPickThresholds t,
+        string? theme,
+        bool weakMarketDay)
+    {
+        var meanRev = IsMeanReversionTheme(theme);
+        var rsLine = meanRev && !weakMarketDay
+            ? $"近5日相对创业板指超额 ≥ {t.WeakRelative5dThresholdPct:0.#}%（企稳/超跌题材允许偏弱，但仍禁止极弱）"
+            : weakMarketDay || t.PreferAbsoluteDirection
+                ? $"近5日相对创业板指超额 ≥ {t.WeakMarketMinRs5dPct:0.#}%（弱市/绝对方向门控）"
+                : $"近5日相对创业板指超额 ≥ {t.WeakRelative5dThresholdPct:0.#}%";
+
+        return
+            "【可计算硬门槛·入库预检将按真源日K校验】" +
+            $"日成交额≥{t.MinAmountYuan:N0}元；" +
+            $"距20日高点须 &gt; {t.ChaseHighNearHighPct:0.#}% 或近1-2日涨幅 &lt; {t.ChaseHighRecentGainPct:0.#}%（否则判追高）；" +
+            rsLine + "；" +
+            $"同行业≤{t.MaxSameThemePerBatch}只；本批最多{t.MaxPicksPerBatch}只；" +
+            $"confidence≥{t.ConfidenceFloor:0.##}（入库）；" +
+            (meanRev
+                ? "题材为超跌/企稳：优先低位缩量后企稳或温和放量反弹，勿挑已连续强势贴高标的；"
+                : "优先相对偏强且非追高；") +
+            "请先在脑内按上述门槛筛，再输出 8～10 只候选（过滤后目标留 2～4 只），禁止硬凑明显不达标代码。";
+    }
 
     public static string? ThemeClassHint(NextDayThemeClass cls) => cls switch
     {
@@ -352,8 +433,90 @@ public static class NextDayPickGuard
             ["金融"] = new[] { "银行", "证券", "保险", "券商" },
             ["消费"] = new[] { "白酒", "食品", "零售", "家电", "餐饮" },
             ["半导体"] = new[] { "芯片", "集成电路", "光刻", "晶圆" },
-            ["机器人"] = new[] { "工业自动化", "智能制造", "机床" }
+            ["机器人"] = new[] { "工业自动化", "智能制造", "机床" },
+            ["电网"] = new[] { "电网设备", "电力设备", "输变电", "特高压" }
         };
+
+    /// <summary>板块种子代码（供全灭时池内重选；非完整指数成分）。</summary>
+    private static readonly IReadOnlyDictionary<string, (string Symbol, string Name)[]> SectorSeedSymbols =
+        new Dictionary<string, (string, string)[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["电网"] =
+            [
+                ("600406", "国电南瑞"), ("601727", "上海电气"), ("002028", "思源电气"),
+                ("600089", "特变电工"), ("000400", "许继电气"), ("601877", "正泰电器"),
+                ("300001", "特锐德"), ("002074", "国轩高科"), ("603606", "东方电缆"),
+                ("600312", "平高电气"), ("002202", "金风科技"), ("601012", "隆基绿能")
+            ],
+            ["半导体"] =
+            [
+                ("603501", "韦尔股份"), ("600584", "长电科技"), ("002371", "北方华创"),
+                ("688981", "中芯国际"), ("002049", "紫光国微"), ("603986", "兆易创新"),
+                ("688012", "中微公司"), ("002156", "通富微电"), ("600703", "三安光电"),
+                ("002185", "华天科技")
+            ],
+            ["新能源"] =
+            [
+                ("300750", "宁德时代"), ("002594", "比亚迪"), ("601012", "隆基绿能"),
+                ("300274", "阳光电源"), ("002460", "赣锋锂业"), ("300014", "亿纬锂能"),
+                ("002129", "TCL中环"), ("688223", "晶科能源")
+            ],
+            ["医药"] =
+            [
+                ("600276", "恒瑞医药"), ("000661", "长春高新"), ("300015", "爱尔眼科"),
+                ("603259", "药明康德"), ("000538", "云南白药"), ("600196", "复星医药"),
+                ("002821", "凯莱英"), ("300347", "泰格医药")
+            ],
+            ["机器人"] =
+            [
+                ("002747", "埃斯顿"), ("300024", "机器人"), ("002008", "大族激光"),
+                ("688777", "中控技术"), ("300124", "汇川技术")
+            ],
+            ["消费"] =
+            [
+                ("600519", "贵州茅台"), ("000858", "五粮液"), ("600887", "伊利股份"),
+                ("000333", "美的集团"), ("000651", "格力电器")
+            ],
+            ["金融"] =
+            [
+                ("601318", "中国平安"), ("600036", "招商银行"), ("601166", "兴业银行"),
+                ("601688", "华泰证券")
+            ],
+            ["军工"] =
+            [
+                ("600893", "航发动力"), ("000768", "中航西飞"), ("600760", "中航沈飞"),
+                ("002179", "中航光电")
+            ]
+        };
+
+    /// <summary>按题材匹配板块种子列表（用于硬门槛预筛池）。</summary>
+    public static IReadOnlyList<(string Symbol, string Name)> ResolveSectorSeedSymbols(string? theme)
+    {
+        if (string.IsNullOrWhiteSpace(theme)) return Array.Empty<(string, string)>();
+        var hits = new List<(string, string)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, seeds) in SectorSeedSymbols)
+        {
+            var aliases = SectorAliases.TryGetValue(key, out var a) ? a : Array.Empty<string>();
+            var match = theme.Contains(key, StringComparison.OrdinalIgnoreCase)
+                        || aliases.Any(x => theme.Contains(x, StringComparison.OrdinalIgnoreCase));
+            if (!match) continue;
+            foreach (var s in seeds)
+            {
+                if (seen.Add(s.Symbol))
+                    hits.Add(s);
+            }
+        }
+
+        // 电网设备等未单独成键时：别名「电网设备」走电网
+        if (hits.Count == 0 && ContainsAny(theme, "电力", "电缆", "电气", "特高压", "输变电"))
+        {
+            foreach (var s in SectorSeedSymbols["电网"])
+                if (seen.Add(s.Symbol)) hits.Add(s);
+        }
+
+        return hits;
+    }
 
     private static int CountTag(IReadOnlyDictionary<string, int> tags, string name) =>
         tags.TryGetValue(name, out var n) ? n : 0;
@@ -376,9 +539,16 @@ public static class NextDayPickGuard
             return NextDayPickFilterVerdict.Reject("日K不足，无法校验强弱/追高", soft: true);
 
         var last = bars[^1];
+        string? softLiquidityNote = null;
         if (last.Amount > 0 && last.Amount < thresholds.MinAmountYuan)
-            return NextDayPickFilterVerdict.Reject(
-                $"流动性不足：日成交额 {last.Amount:N0} &lt; {thresholds.MinAmountYuan:N0}");
+        {
+            var liqMsg =
+                $"流动性不足：日成交额 {last.Amount:N0} &lt; {thresholds.MinAmountYuan:N0}";
+            if (thresholds.SoftLiquidityReject)
+                softLiquidityNote = liqMsg;
+            else
+                return NextDayPickFilterVerdict.Reject(liqMsg);
+        }
 
         var reasons = new List<string>();
 
@@ -449,10 +619,13 @@ public static class NextDayPickGuard
         if (reasons.Count > 0)
             return NextDayPickFilterVerdict.Reject(string.Join("；", reasons));
 
-        return NextDayPickFilterVerdict.Pass(
-            stock5d: stock5,
-            index5d: index5,
-            rs5d: stock5 is not null && index5 is not null ? stock5 - index5 : null);
+        decimal? rs5Out = stock5 is not null && index5 is not null ? stock5 - index5 : null;
+        // 预检：流动性偏弱但路径/强弱过关 → SoftSkip（Filter 预检放行，入库 strict 仍可再拦）
+        if (softLiquidityNote is not null)
+            return NextDayPickFilterVerdict.Reject(
+                softLiquidityNote, soft: true, stock5d: stock5, index5d: index5, rs5d: rs5Out);
+
+        return NextDayPickFilterVerdict.Pass(stock5d: stock5, index5d: index5, rs5d: rs5Out);
     }
 
     private static decimal? ReturnN(IReadOnlyList<DailyBar> bars, int n)
@@ -486,7 +659,9 @@ public sealed record NextDayPickThresholds(
     int MaxSameThemePerBatch,
     bool BlockHighOpenChase,
     int MaxPicksPerBatch = NextDayPickGuard.MaxPicksPerBatch,
-    bool PreferAbsoluteDirection = false)
+    bool PreferAbsoluteDirection = false,
+    /// <summary>预检时流动性不足改为 SoftSkip，避免中小盘题材整批被 成交额 砍光。</summary>
+    bool SoftLiquidityReject = false)
 {
     public static NextDayPickThresholds Default { get; } = new(
         NextDayPickGuard.ConfidenceFloor,
@@ -500,7 +675,8 @@ public sealed record NextDayPickThresholds(
         NextDayPickGuard.MaxSameThemePerBatch,
         BlockHighOpenChase: false,
         MaxPicksPerBatch: NextDayPickGuard.MaxPicksPerBatch,
-        PreferAbsoluteDirection: false);
+        PreferAbsoluteDirection: false,
+        SoftLiquidityReject: false);
 }
 
 public sealed record NextDayPickFilterVerdict(
@@ -517,8 +693,13 @@ public sealed record NextDayPickFilterVerdict(
         decimal? rs5d = null) =>
         new(true, null, false, stock5d, index5d, rs5d);
 
-    public static NextDayPickFilterVerdict Reject(string reason, bool soft = false) =>
-        new(false, reason, soft, null, null, null);
+    public static NextDayPickFilterVerdict Reject(
+        string reason,
+        bool soft = false,
+        decimal? stock5d = null,
+        decimal? index5d = null,
+        decimal? rs5d = null) =>
+        new(false, reason, soft, stock5d, index5d, rs5d);
 }
 
 public enum NextDayThemeClass
