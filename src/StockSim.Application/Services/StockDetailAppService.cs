@@ -116,6 +116,21 @@ public class StockDetailAppService
 
         var riskBySymbol = await _downsideRisk.GetLatestBySymbolsAsync(symbols, ct);
 
+        // 昨收：用于预测高低相对涨跌幅（列表静态展示，不依赖行情 JS 刷新）
+        IReadOnlyDictionary<string, LightStockQuote> quoteBySymbol =
+            new Dictionary<string, LightStockQuote>(StringComparer.OrdinalIgnoreCase);
+        if (symbols.Count > 0)
+        {
+            try
+            {
+                quoteBySymbol = await _quotes.GetQuotesAsync(symbols, ct);
+            }
+            catch
+            {
+                /* 报价失败时仍返回行，涨跌幅列显示为 - */
+            }
+        }
+
         var boundSymbolSet = items
             .Where(i => i.BoundStrategyId.HasValue)
             .Select(i => i.Symbol)
@@ -161,6 +176,18 @@ public class StockDetailAppService
             aiAvgBySymbol.TryGetValue(item.Symbol, out var aiAvg);
             atrAvgBySymbol.TryGetValue(item.Symbol, out var atrAvg);
             riskBySymbol.TryGetValue(item.Symbol, out var risk);
+            quoteBySymbol.TryGetValue(item.Symbol, out var q);
+            var refClose = q?.PreClose is > 0 ? q.PreClose : null;
+            decimal? highChg = null;
+            decimal? lowChg = null;
+            if (refClose is > 0 && fc is not null)
+            {
+                if (fc.PredictedHigh > 0)
+                    highChg = Math.Round((fc.PredictedHigh - refClose.Value) / refClose.Value * 100m, 2);
+                if (fc.PredictedLow > 0)
+                    lowChg = Math.Round((fc.PredictedLow - refClose.Value) / refClose.Value * 100m, 2);
+            }
+
             string statusText;
             if (isNextDay)
             {
@@ -222,6 +249,9 @@ public class StockDetailAppService
                 fc?.ForecastForDate,
                 fc?.PredictedHigh,
                 fc?.PredictedLow,
+                refClose,
+                highChg,
+                lowChg,
                 fc?.Status.ToString(),
                 fc?.Source.ToString(),
                 aiAvgBySymbol.ContainsKey(item.Symbol) ? aiAvg : null,

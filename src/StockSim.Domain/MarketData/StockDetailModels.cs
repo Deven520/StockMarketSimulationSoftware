@@ -84,6 +84,8 @@ public sealed class LightStockQuote
     public required string Name { get; init; }
     public decimal Last { get; init; }
     public decimal ChangePercent { get; init; }
+    /// <summary>昨收/前收（用于预测高低相对涨跌幅）。</summary>
+    public decimal? PreClose { get; init; }
     public decimal? PeTtm { get; init; }
     public decimal? Pb { get; init; }
     public string? Industry { get; init; }

@@ -56,6 +56,12 @@ public record PoolStockRowDto(
     DateTime? ForecastForDate = null,
     decimal? PredictedHigh = null,
     decimal? PredictedLow = null,
+    /// <summary>昨收/前收，作预测高低涨跌幅基准。</summary>
+    decimal? ForecastRefClose = null,
+    /// <summary>预测高相对昨收涨跌幅%。</summary>
+    decimal? PredictedHighChgPct = null,
+    /// <summary>预测低相对昨收涨跌幅%。</summary>
+    decimal? PredictedLowChgPct = null,
     string? ForecastStatus = null,
     string? ForecastSource = null,
     decimal? AvgAiAccuracyPct = null,

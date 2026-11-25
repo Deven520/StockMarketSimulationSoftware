@@ -109,6 +109,7 @@ public sealed class SimulatedStockDetailProvider : IStockDetailProvider
             Name = detail.Board.Name,
             Last = detail.Board.Last,
             ChangePercent = detail.Board.ChangePercent,
+            PreClose = detail.Board.PreClose > 0 ? detail.Board.PreClose : null,
             PeTtm = detail.Fundamentals.PeTtm,
             Pb = detail.Fundamentals.Pb,
             Industry = detail.Fundamentals.Industry,
