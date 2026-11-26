@@ -90,6 +90,11 @@ public sealed class AdaptiveOverrideService
         // 预测低显著失效（暴跌日）：买偏离更负、softPrefer 更接近放行，卖侧略抬阈值
         var softShrink = PriceForecastMetrics.SoftPreferShrinkScale;
         var lastPx = snap.Last > 0 ? snap.Last : snap.DayLow;
+        var recentAcc = policy.Forecast?.RecentCombinedAccuracyPct;
+        if (recentAcc is < PriceForecastMetrics.LowAccuracyDeweightThreshold)
+            softShrink = Math.Max(softShrink, 0.8m); // 低准日少缩仓，避免锚在错误区间
+        else if (recentAcc is < 55m)
+            softShrink = Math.Max(softShrink, 0.7m);
         if (PriceForecastMetrics.IsForecastLowBroken(policy.Forecast, lastPx))
         {
             if (buyAdj < 0) buyAdj *= 1.15m;
@@ -100,16 +105,35 @@ public sealed class AdaptiveOverrideService
                 pathLabel += "+ForecastBreak";
         }
 
-        // 当日大跌：略降仓位，留现金给第二腿
+        // 当日大跌：略降仓位；大涨/HighGo：缩 softBand、允许近预测高仍低吸
+        var skipNearHighAbandon = false;
         if (snap.PrevClose > 0 && lastPx > 0)
         {
             var dayRet = (lastPx - snap.PrevClose) / snap.PrevClose * 100m;
             if (dayRet <= -5m)
                 sizeAdj *= 0.85m;
+            if (dayRet >= 7m
+                || (pathLabel?.Contains("HighOpenHighGo", StringComparison.OrdinalIgnoreCase) ?? false)
+                || (pathLabel?.Contains("HighGo", StringComparison.OrdinalIgnoreCase) ?? false)
+                   && dayRet >= 4m)
+            {
+                softShrink = Math.Min(softShrink, 0.35m);
+                skipNearHighAbandon = true;
+            }
         }
 
         if (runtime.ForceFlatExcessReduced)
             blockNewT = true;
+
+        // HighGo Locked：剧本不应继续 BlockNewT（反弹解锁后的防守残留）
+        if (runtime.PathPhase == PathPhase.Locked
+            && pathLabel is not null
+            && pathLabel.Contains("HighGo", StringComparison.OrdinalIgnoreCase)
+            && !runtime.ForceFlatExcessReduced
+            && playbook is { BlockNewT: false })
+        {
+            blockNewT = false;
+        }
 
         var overrides = new RuntimeOverrides
         {
@@ -125,7 +149,8 @@ public sealed class AdaptiveOverrideService
             PullbackSellPct = pullback,
             BlockNewT = blockNewT,
             SoftBandShrinkScale = softShrink,
-            PathLabel = pathLabel
+            PathLabel = pathLabel,
+            SkipNearPredictedHighAbandon = skipNearHighAbandon
         };
 
         overrides.BuyDeviationPct = policy.Triggers.BuyDeviationPct.Resolve(overrides.BuyDeviationPct);

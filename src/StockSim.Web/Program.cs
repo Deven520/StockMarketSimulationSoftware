@@ -29,7 +29,8 @@ builder.Services.AddSingleton<IMarketDataProvider>(sp =>
         sp.GetRequiredService<ILogger<LiveOrReplayMarketDataProvider>>()));
 builder.Services.AddHttpClient<IStockDetailProvider, EastMoneyStockDetailProvider>(client =>
 {
-    client.Timeout = TimeSpan.FromSeconds(20);
+    // 页面路径快速失败；单 host 软超时见 EastMoneyStockDetailProvider（约 4s），此处为兜底上限
+    client.Timeout = TimeSpan.FromSeconds(12);
     client.DefaultRequestHeaders.UserAgent.ParseAdd(
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
     client.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://quote.eastmoney.com/");

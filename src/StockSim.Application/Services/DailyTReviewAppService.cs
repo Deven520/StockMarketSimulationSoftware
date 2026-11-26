@@ -595,14 +595,73 @@ public sealed class DailyTReviewAppService
                 findings[key] = n.DeepClone();
         }
 
-        review.FindingsJson = findings.Count > 0 ? findings.ToJsonString(JsonOpts) : null;
         if (json["tCyclePnlApprox"] is JsonValue jv
             && jv.TryGetValue<decimal>(out var aiCycle)
             && !review.CyclePnlApprox.HasValue)
             review.CyclePnlApprox = aiCycle;
 
+        // 费后净 Cycle KPI：零毛利却有手续费 → 评级封顶 C；净亏不得 A/B
+        var cycle = review.CyclePnlApprox ?? 0m;
+        var fees = review.Fees ?? 0m;
+        var net = Math.Round(cycle - fees, 2);
+        findings["netCycleAfterFee"] = net;
+        findings["fees"] = fees;
+        if (Math.Abs(cycle) < 0.01m && fees > 0.01m)
+        {
+            if (IsGradeBetterThan(review.Grade, "C"))
+                review.Grade = "C";
+            findings["gradeCapReason"] = "Cycle≈0 且有手续费（未闭环/空转）";
+        }
+        else if (net < 0 && IsGradeBetterThan(review.Grade, "C"))
+        {
+            review.Grade = "C";
+            findings["gradeCapReason"] = "费后净 Cycle<0";
+        }
+
+        // 固化可执行 hints，供夜更/参数吸收（不仅 notes）
+        review.StrategyHintsJson = MergeExecutableHints(review.StrategyHintsJson, net, fees, cycle);
+
+        review.FindingsJson = findings.Count > 0 ? findings.ToJsonString(JsonOpts) : null;
         job.AnalysisSummary = review.Summary;
         job.AnalysisStepsJson = review.FindingsJson;
+    }
+
+    private static bool IsGradeBetterThan(string? grade, string baseline)
+    {
+        static int Rank(string? g) => g?.Trim().ToUpperInvariant() switch
+        {
+            "S" or "A+" or "A" => 4,
+            "B+" or "B" => 3,
+            "C+" or "C" => 2,
+            "D" or "E" or "F" => 1,
+            _ => 0
+        };
+        return Rank(grade) > Rank(baseline);
+    }
+
+    /// <summary>把复盘结论落成布尔开关，夜更提示词与运行时可硬消化。</summary>
+    private static string MergeExecutableHints(string? existingJson, decimal net, decimal fees, decimal cycle)
+    {
+        JsonObject root;
+        try
+        {
+            root = string.IsNullOrWhiteSpace(existingJson)
+                ? new JsonObject()
+                : (JsonNode.Parse(existingJson) as JsonObject) ?? new JsonObject();
+        }
+        catch
+        {
+            root = new JsonObject();
+        }
+
+        root["forceFlatExcessShouldNotOpenT"] = true;
+        root["preferCloseOpenTBeforeNewSell"] = true;
+        root["minRoundTripRequiresTwoXFees"] = true;
+        if (Math.Abs(cycle) < 0.01m && fees > 0.01m)
+            root["penalizeZeroCycleWithFees"] = true;
+        if (net < 0)
+            root["tightenMinRoundTripEdge"] = true;
+        return root.ToJsonString(JsonOpts);
     }
 
     private static JsonObject? ExtractJsonObject(string output)

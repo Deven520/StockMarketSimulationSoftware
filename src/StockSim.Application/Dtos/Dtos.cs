@@ -3,6 +3,17 @@ using StockSim.Domain.MarketData;
 
 namespace StockSim.Application.Dtos;
 
+/// <summary>东方财富连通性探测结果。</summary>
+public record EastMoneyHealthDto(
+    bool Ok,
+    string StatusText,
+    string ProbeSymbol,
+    string? ProbeName,
+    decimal? Last,
+    long LatencyMs,
+    string Message,
+    DateTime CheckedAt);
+
 public record StockPoolDto(Guid Id, string Name, string? Description, bool IsActive, int ItemCount);
 public record StockPoolItemDto(
     Guid Id,

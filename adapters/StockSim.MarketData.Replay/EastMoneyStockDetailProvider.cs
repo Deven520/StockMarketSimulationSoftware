@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using StockSim.Domain.MarketData;
 
@@ -13,15 +14,16 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
 {
     private readonly HttpClient _http;
     private readonly ILogger<EastMoneyStockDetailProvider> _logger;
+    private readonly IMemoryCache _cache;
     private readonly SimulatedStockDetailProvider _fallback = new();
 
+    private static readonly TimeSpan DetailCacheTtl = TimeSpan.FromSeconds(45);
+
+    /// <summary>页面路径只试 2 个 host，避免串行拖到数十秒。</summary>
     private static readonly string[] PushHosts =
     [
         "push2.eastmoney.com",
-        "push2delay.eastmoney.com",
-        "82.push2.eastmoney.com",
-        "83.push2.eastmoney.com",
-        "85.push2.eastmoney.com"
+        "push2delay.eastmoney.com"
     ];
 
     private static readonly string[] HisHosts =
@@ -30,10 +32,14 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
         "push2hisdelay.eastmoney.com"
     ];
 
-    public EastMoneyStockDetailProvider(HttpClient http, ILogger<EastMoneyStockDetailProvider> logger)
+    public EastMoneyStockDetailProvider(
+        HttpClient http,
+        ILogger<EastMoneyStockDetailProvider> logger,
+        IMemoryCache cache)
     {
         _http = http;
         _logger = logger;
+        _cache = cache;
         if (_http.BaseAddress is null)
         {
             _http.BaseAddress = new Uri("https://push2.eastmoney.com/");
@@ -85,7 +91,7 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
                 IsSimulated = false
             };
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
         {
             _logger.LogWarning(ex, "Light quote failed for {Symbol}", symbol);
             return null;
@@ -190,57 +196,96 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
             return await _fallback.GetDetailAsync(symbol, name, ct);
         }
 
-        try
+        var cacheKey = "em:detail:" + symbol;
+        if (_cache.TryGetValue(cacheKey, out StockDetailBundle? cached)
+            && cached is not null
+            && !cached.IsSimulated)
+            return cached;
+
+        var secid = ToSecId(symbol);
+
+        // 关键路径与健康检查一致：先拿轻量报价；分时/资金流失败不得拖垮整包（否则 AI 刷新会误判模拟）
+        // HttpClient 超时是 TaskCanceledException(OCE)：仅当调用方 ct 已取消时才上抛，超时当软失败。
+        QuoteSnap? quote = null;
+        IReadOnlyList<DailyBar> daily = Array.Empty<DailyBar>();
+        IReadOnlyList<MinuteBar> minutes = Array.Empty<MinuteBar>();
+        FundFlowSnapshot? flow = null;
+
+        try { quote = await FetchQuoteAsync(secid, ct); }
+        catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
+        { _logger.LogWarning(ex, "EastMoney quote failed for {Symbol}", symbol); }
+
+        try { daily = await FetchDailyBarsAsync(secid, ct); }
+        catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
+        { _logger.LogWarning(ex, "EastMoney daily failed for {Symbol}", symbol); }
+
+        // 报价偶发空包：再试一次（与健康检查同接口）
+        if (quote is null)
         {
-            var secid = ToSecId(symbol);
-            var quoteTask = FetchQuoteAsync(secid, ct);
-            var dailyTask = FetchDailyBarsAsync(secid, ct);
-            var minuteTask = FetchMinuteBarsAsync(secid, ct);
-            var flowTask = FetchFundFlowAsync(secid, ct);
+            try { quote = await FetchQuoteAsync(secid, ct); }
+            catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
+            { _logger.LogDebug(ex, "EastMoney quote retry failed for {Symbol}", symbol); }
+        }
 
-            await Task.WhenAll(quoteTask, dailyTask, minuteTask, flowTask);
+        if (daily.Count == 0)
+        {
+            try { daily = await FetchDailyBarsAsync(secid, ct); }
+            catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
+            { _logger.LogDebug(ex, "EastMoney daily retry failed for {Symbol}", symbol); }
+        }
 
-            var quote = await quoteTask;
-            var daily = await dailyTask;
-            var minutes = await minuteTask;
-            var flow = await flowTask;
+        // 分时/资金流：尽力而为，失败忽略
+        try { minutes = await FetchMinuteBarsAsync(secid, ct); }
+        catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
+        { _logger.LogDebug(ex, "EastMoney minute skipped for {Symbol}", symbol); }
 
-            if (daily.Count == 0 && quote is null)
-            {
-                _logger.LogWarning("EastMoney empty for {Symbol}, fallback simulated", symbol);
-                var fb = await _fallback.GetDetailAsync(symbol, name, ct);
-                if (fb is not null)
-                {
-                    fb = CloneWithNote(fb, "东方财富无数据，已回退模拟行情（日期已限制为不超过今天）。");
-                }
+        try { flow = await FetchFundFlowAsync(secid, ct); }
+        catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
+        { _logger.LogDebug(ex, "EastMoney fundFlow skipped for {Symbol}", symbol); }
 
-                return fb;
-            }
+        // 仅当报价与日K都拿不到时才回退模拟（健康检查只测报价，故可能「检查正常、旧 GetDetail 却模拟」）
+        if (quote is null && daily.Count == 0)
+        {
+            _logger.LogWarning(
+                "EastMoney empty quote+daily for {Symbol}, fallback simulated (AI refresh must reject IsSimulated)",
+                symbol);
+            var fb = await _fallback.GetDetailAsync(symbol, name, ct);
+            return fb is null
+                ? null
+                : CloneWithNote(fb, "东方财富报价/日K均无数据，已回退模拟行情（仅供页面占位；AI预测/对账不得使用）。");
+        }
 
-            var lastDaily = daily.Count > 0 ? daily[^1] : null;
-            var lastMinute = minutes.Count > 0 ? minutes[^1] : null;
-            var displayName = quote?.Name ?? name ?? symbol;
+        var lastDaily = daily.Count > 0 ? daily[^1] : null;
+        var lastMinute = minutes.Count > 0 ? minutes[^1] : null;
+        var displayName = quote?.Name ?? name ?? symbol;
 
-            var quoteLast = quote is not null && quote.Last > 0 ? quote.Last : (decimal?)null;
-            var preClose = PositiveOrNull(quote?.PreClose)
-                           ?? (daily.Count > 1 ? daily[^2].Close : (decimal?)null)
-                           ?? lastDaily?.Close
-                           ?? 0;
-            // 未开市 quote.Last=0 时不能短路，需回退昨收/日K/分时
-            var last = quoteLast
-                       ?? PositiveOrNull(lastMinute?.Close)
-                       ?? PositiveOrNull(lastDaily?.Close)
-                       ?? PositiveOrNull(preClose)
+        var quoteLast = quote is not null && quote.Last > 0 ? quote.Last : (decimal?)null;
+        var preClose = PositiveOrNull(quote?.PreClose)
+                       ?? (daily.Count > 1 ? daily[^2].Close : (decimal?)null)
+                       ?? lastDaily?.Close
                        ?? 0;
-            var open = PositiveOrNull(quote?.Open) ?? lastDaily?.Open ?? last;
-            var high = PositiveOrNull(quote?.High) ?? lastDaily?.High ?? last;
-            var low = PositiveOrNull(quote?.Low) ?? lastDaily?.Low ?? last;
-            var change = last - preClose;
-            var changePct = preClose == 0 || (quoteLast is null && quote?.Last <= 0)
-                ? 0
-                : change / preClose * 100m;
+        var last = quoteLast
+                   ?? PositiveOrNull(lastMinute?.Close)
+                   ?? PositiveOrNull(lastDaily?.Close)
+                   ?? PositiveOrNull(preClose)
+                   ?? 0;
+        var open = PositiveOrNull(quote?.Open) ?? lastDaily?.Open ?? last;
+        var high = PositiveOrNull(quote?.High) ?? lastDaily?.High ?? last;
+        var low = PositiveOrNull(quote?.Low) ?? lastDaily?.Low ?? last;
+        var change = last - preClose;
+        var changePct = preClose == 0 || (quoteLast is null && quote?.Last <= 0)
+            ? 0
+            : change / preClose * 100m;
 
-            var board = new StockQuoteBoard
+        var note = daily.Count == 0
+            ? "数据来源：东方财富（仅真实报价，日K缺失；可降级预测，不宜计入准确率）。仅供模拟盘研究。"
+            : minutes.Count == 0 || flow is null
+                ? "数据来源：东方财富（报价/日K优先；分时或资金流部分缺失）。仅供模拟盘研究。"
+                : "数据来源：东方财富公开接口（实时/延时视接口而定）。仅供模拟盘研究，请遵守数据源使用条款。";
+
+        var bundle = new StockDetailBundle
+        {
+            Board = new StockQuoteBoard
             {
                 Symbol = symbol,
                 Name = displayName,
@@ -255,24 +300,16 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
                 Amount = Round2(quote?.Amount ?? lastDaily?.Amount ?? 0),
                 TurnoverRate = Round2(quote?.TurnoverRate ?? 0),
                 AsOf = DateTime.Now
-            };
-
-            return new StockDetailBundle
-            {
-                Board = board,
-                Fundamentals = quote?.Fundamentals ?? new StockFundamentals(),
-                FundFlow = flow ?? new FundFlowSnapshot { AsOf = DateTime.Now },
-                DailyBars = daily,
-                MinuteBars = minutes,
-                DataSourceNote = "数据来源：东方财富公开接口（实时/延时视接口而定）。仅供模拟盘研究，请遵守数据源使用条款。"
-            };
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "EastMoney fetch failed for {Symbol}", symbol);
-            var fb = await _fallback.GetDetailAsync(symbol, name, ct);
-            return fb is null ? null : CloneWithNote(fb, $"真实行情获取失败：{ex.Message}；已回退模拟数据。");
-        }
+            },
+            Fundamentals = quote?.Fundamentals ?? new StockFundamentals(),
+            FundFlow = flow ?? new FundFlowSnapshot { AsOf = DateTime.Now },
+            DailyBars = daily,
+            MinuteBars = minutes,
+            DataSourceNote = note,
+            IsSimulated = false
+        };
+        _cache.Set(cacheKey, bundle, DetailCacheTtl);
+        return bundle;
     }
 
     private async Task<QuoteSnap?> FetchQuoteAsync(string secid, CancellationToken ct)
@@ -517,20 +554,28 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
         Exception? lastEx = null;
         foreach (var host in hosts)
         {
+            ct.ThrowIfCancellationRequested();
             var tryUrl = ReplaceHost(url, host);
             try
             {
-                using var resp = await _http.GetAsync(tryUrl, ct);
+                // 单 host 软超时：避免 HttpClient.Timeout / 挂死 host 以 OCE 冒泡，阻断换机与整包拼装
+                using var hostCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                hostCts.CancelAfter(TimeSpan.FromSeconds(4));
+                using var resp = await _http.GetAsync(tryUrl, hostCts.Token);
                 if (!resp.IsSuccessStatusCode)
                 {
                     _logger.LogDebug("HTTP {Code} for {Url}", (int)resp.StatusCode, tryUrl);
                     continue;
                 }
 
-                await using var stream = await resp.Content.ReadAsStreamAsync(ct);
-                return await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+                await using var stream = await resp.Content.ReadAsStreamAsync(hostCts.Token);
+                return await JsonDocument.ParseAsync(stream, cancellationToken: hostCts.Token);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogDebug("EastMoney host {Host} soft-timeout, try next", host);
+            }
+            catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
             {
                 lastEx = ex;
                 _logger.LogDebug(ex, "EastMoney host {Host} failed", host);
@@ -543,6 +588,12 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
             _logger.LogWarning("EastMoney all hosts returned non-success for {Url}", url);
         return null;
     }
+
+    /// <summary>
+    /// 仅当调用方 CancellationToken 已取消时上抛 OCE；HttpClient 超时等本地取消当软失败。
+    /// </summary>
+    private static bool ShouldRethrowCancel(Exception ex, CancellationToken ct) =>
+        ex is OperationCanceledException && ct.IsCancellationRequested;
 
     private static string ReplaceHost(string url, string host)
     {

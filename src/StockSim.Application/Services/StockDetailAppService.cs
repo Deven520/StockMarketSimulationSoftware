@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using StockSim.Application.Dtos;
 using StockSim.Domain.Entities;
@@ -29,6 +30,68 @@ public class StockDetailAppService
         _downsideRisk = downsideRisk;
         _dailyTReviews = dailyTReviews;
     }
+
+    /// <summary>
+    /// 探测东方财富轻量报价是否可用（绕过 30s 报价缓存，直连 provider）。
+    /// </summary>
+    public async Task<EastMoneyHealthDto> ProbeEastMoneyAsync(
+        string probeSymbol = "000001",
+        CancellationToken ct = default)
+    {
+        probeSymbol = new string((probeSymbol ?? "000001").Where(char.IsDigit).ToArray());
+        if (probeSymbol.Length != 6) probeSymbol = "000001";
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(6));
+            var q = await _detailProvider.GetLightQuoteAsync(probeSymbol, null, cts.Token);
+            sw.Stop();
+
+            if (q is null)
+            {
+                return new EastMoneyHealthDto(
+                    false, "异常", probeSymbol, null, null, sw.ElapsedMilliseconds,
+                    "未返回报价（超时/空包/接口失败）", DateTime.Now);
+            }
+
+            if (q.IsSimulated)
+            {
+                return new EastMoneyHealthDto(
+                    false, "异常", q.Symbol, q.Name, q.Last, sw.ElapsedMilliseconds,
+                    "返回了模拟行情，真源不可用", DateTime.Now);
+            }
+
+            if (q.Last <= 0)
+            {
+                return new EastMoneyHealthDto(
+                    false, "异常", q.Symbol, q.Name, q.Last, sw.ElapsedMilliseconds,
+                    "报价无效（Last≤0）", DateTime.Now);
+            }
+
+            return new EastMoneyHealthDto(
+                true, "正常", q.Symbol, q.Name, q.Last, sw.ElapsedMilliseconds,
+                $"已取到真实报价 {q.Last:F2}", DateTime.Now);
+        }
+        catch (OperationCanceledException)
+        {
+            sw.Stop();
+            return new EastMoneyHealthDto(
+                false, "异常", probeSymbol, null, null, sw.ElapsedMilliseconds,
+                "探测超时（>6s）", DateTime.Now);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return new EastMoneyHealthDto(
+                false, "异常", probeSymbol, null, null, sw.ElapsedMilliseconds,
+                Truncate(ex.Message, 120), DateTime.Now);
+        }
+    }
+
+    private static string Truncate(string s, int max) =>
+        string.IsNullOrEmpty(s) || s.Length <= max ? s : s[..max] + "…";
 
     /// <summary>首屏：仅库内持仓/策略/今日盈亏，行情字段留空由前端异步刷。</summary>
     public async Task<IReadOnlyList<PoolStockRowDto>> GetPoolStockRowsAsync(Guid poolId, CancellationToken ct = default)

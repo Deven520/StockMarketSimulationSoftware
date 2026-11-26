@@ -170,15 +170,18 @@ public class PriceForecastMetricsTests
             PredictedLow = 100m,
             Source = "ai"
         };
-        // 历史系统性偏高 10% → 校准偏差钳制在 ±5%
+        // 历史系统性偏高 10% → 校准偏差钳制在 ±MaxCalibrationAdjustPct
         var calibrated = PriceForecastMetrics.ApplyBiasCalibration(raw, 10m, 10m);
         Assert.Equal("calibrated_ai", calibrated.Source);
         Assert.True(calibrated.PredictedHigh < 110m);
         Assert.True(calibrated.PredictedLow < 100m);
-        // 10% 输入钳到 5%：110/1.05 ≈ 104.76
-        Assert.Equal(104.76m, calibrated.PredictedHigh);
+        // 10% 输入钳到 6%：110/1.06 ≈ 103.77
+        Assert.Equal(103.77m, calibrated.PredictedHigh);
         Assert.False(PriceForecastMetrics.ShouldApplyCalibration(3, 2m, 2m));
-        Assert.True(PriceForecastMetrics.ShouldApplyCalibration(5, 2m, 2m));
+        Assert.True(PriceForecastMetrics.ShouldApplyCalibration(4, 2m, 2m));
+        Assert.True(PriceForecastMetrics.ShouldTightenHighOnly(3, 1.5m));
+        var light = PriceForecastMetrics.TightenOverestimatedHigh(raw, 2.5m, 0.55m);
+        Assert.True(light.PredictedHigh < raw.PredictedHigh);
     }
 
     [Fact]
@@ -215,7 +218,7 @@ public class PriceForecastMetricsTests
             CountsTowardAccuracy = false
         };
         var w = PriceForecastMetrics.ResolveAiBlendWeight(20m);
-        Assert.Equal(0.35m, w);
+        Assert.Equal(0.28m, w);
         var blended = PriceForecastMetrics.BlendAiWithAtr(ai, atr, w);
         Assert.True(blended.PredictedHigh < 120m);
         Assert.True(blended.PredictedHigh > 105m);
@@ -281,6 +284,69 @@ public class PriceForecastMetricsTests
         Assert.Equal(1m, PriceForecastMetrics.ResolveAggressionScale(80m));
         Assert.True(PriceForecastMetrics.ResolveAggressionScale(0m) < 1m);
         Assert.Equal(1m, PriceForecastMetrics.ResolveAggressionScale(null));
+    }
+
+    [Fact]
+    public void IsForecastPriceLevelPlausible_Rejects_Simulated_Scale_Jump()
+    {
+        // 新易盛真价~180，模拟回退~40
+        Assert.False(PriceForecastMetrics.IsForecastPriceLevelPlausible(40.76m, 38.96m, 190m));
+        Assert.True(PriceForecastMetrics.IsForecastPriceLevelPlausible(197m, 168m, 190m));
+        Assert.True(PriceForecastMetrics.IsForecastPriceLevelPlausible(40m, 38m, 0m)); // 无参考不拦
+    }
+
+    [Fact]
+    public void ClassifyForecastHorizon_Splits_SameDay_And_NextDay()
+    {
+        var forDate = new DateTime(2026, 11, 24);
+        Assert.Equal(
+            PriceForecastMetrics.ForecastHorizon.NextDay,
+            PriceForecastMetrics.ClassifyForecastHorizon(new DateTime(2026, 11, 23, 22, 0, 0), forDate));
+        Assert.Equal(
+            PriceForecastMetrics.ForecastHorizon.SameDay,
+            PriceForecastMetrics.ClassifyForecastHorizon(new DateTime(2026, 11, 24, 10, 0, 0), forDate));
+        Assert.Equal(
+            PriceForecastMetrics.ForecastHorizon.Other,
+            PriceForecastMetrics.ClassifyForecastHorizon(new DateTime(2026, 11, 24, 16, 0, 0), forDate));
+    }
+
+    [Fact]
+    public void ClampForecastToTradingBand_Caps_Reachable_High_By_Atr()
+    {
+        var raw = new ForecastPolicy
+        {
+            PredictedHigh = 112m, // 涨停级虚高
+            PredictedLow = 98m,
+            Source = "ai",
+            CountsTowardAccuracy = true
+        };
+        var clamped = PriceForecastMetrics.ClampForecastToTradingBand(raw, 100m, atr: 3m, limitCapPct: 12m);
+        // 可达上沿 100+3*1.35=104.05
+        Assert.True(clamped.PredictedHigh <= 104.05m + 0.01m);
+        Assert.True(clamped.PredictedHigh < 112m);
+    }
+
+    [Fact]
+    public void SoftBand_Widens_When_Recent_Accuracy_Low()
+    {
+        var fc = new ForecastPolicy
+        {
+            ForDate = "2026-11-09",
+            PredictedHigh = 110m,
+            PredictedLow = 100m,
+            Source = "ai",
+            SoftBandMode = "softPrefer",
+            RecentCombinedAccuracyPct = 20m
+        };
+        var now = new DateTime(2026, 11, 9, 10, 0, 0);
+        // 低准 → ratio 0.35+0.15=0.5 → 高抛区 ≥110-5=105；无准数字时 0.35→≥106.5
+        var lowAcc = PriceForecastMetrics.EvaluateForecastSoftBand(
+            fc, 105.2m, now, forSell: true, 0.35m, out _, referencePrice: 100m);
+        Assert.Equal(SoftBandVerdict.Pass, lowAcc);
+        fc.RecentCombinedAccuracyPct = 90m;
+        var highAcc = PriceForecastMetrics.EvaluateForecastSoftBand(
+            fc, 105.2m, now, forSell: true, 0.35m, out _, referencePrice: 100m);
+        Assert.Equal(SoftBandVerdict.PreferShrink, highAcc);
     }
 
     [Fact]

@@ -154,7 +154,8 @@ public sealed class StrategyParameters
             PullbackSellPct = o.PullbackSellPct ?? Path.PullbackSellPct,
             BlockNewT = o.BlockNewT,
             SoftBandShrinkScale = o.SoftBandShrinkScale ?? 0.6m,
-            PathLabel = o.PathLabel
+            PathLabel = o.PathLabel,
+            SkipNearPredictedHighAbandon = o.SkipNearPredictedHighAbandon
         };
     }
 
@@ -251,11 +252,11 @@ public sealed class RiskPolicy
     public decimal MaxSlippageBps { get; set; } = 20m;
 
     /// <summary>
-    /// 新开 T 腿前要求的费后期望净价差（bps）。0=关闭。
-    /// 用 |sellDev|+|buyDev| 的一部分估算可捕获价差，再扣双边费粗估。
+    /// 开腿后期望净 bps 下限（另硬要求毛捕获 ≥ 约 2×双边费）。
+    /// 用 |sellDev|+|buyDev| 的一部分估算可捕获价差，再扣双边费粗估；负数关闭。
     /// </summary>
     [JsonPropertyName("minRoundTripEdgeBps")]
-    public decimal MinRoundTripEdgeBps { get; set; } = 8m;
+    public decimal MinRoundTripEdgeBps { get; set; } = 12m;
 }
 
 public sealed class FactorPolicy
@@ -330,6 +331,10 @@ public sealed class ForecastPolicy
     /// <summary>相对参考价（昨收/开盘）钳制预测高的涨幅上限 %。</summary>
     [JsonPropertyName("capHighByLimitPct")]
     public decimal CapHighByLimitPct { get; set; } = 12m;
+
+    /// <summary>近史 AI 综合准确率（夜更写入，供盘中 softBand 降权）。</summary>
+    [JsonPropertyName("recentCombinedAccuracyPct")]
+    public decimal? RecentCombinedAccuracyPct { get; set; }
 }
 
 /// <summary>盘中路径分型策略边界。</summary>
@@ -424,6 +429,8 @@ public sealed class RuntimeOverrides
     public bool BlockNewT { get; set; }
     public decimal? SoftBandShrinkScale { get; set; }
     public string? PathLabel { get; set; }
+    /// <summary>强势/HighGo 日：SoldHigh 不因「近预测高」放弃低吸。</summary>
+    public bool SkipNearPredictedHighAbandon { get; set; }
 }
 
 /// <summary>边界钳制后的有效参数。</summary>
@@ -462,6 +469,7 @@ public sealed class EffectiveStrategyParams
     public bool BlockNewT { get; init; }
     public decimal SoftBandShrinkScale { get; init; } = 0.6m;
     public string? PathLabel { get; init; }
+    public bool SkipNearPredictedHighAbandon { get; init; }
 }
 
 public enum SignalAction

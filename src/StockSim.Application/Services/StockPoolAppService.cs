@@ -13,6 +13,9 @@ public class StockPoolAppService
 {
     public const decimal DefaultPerStockCash = 200_000m;
 
+    private static DateTime _lastSettleUtc = DateTime.MinValue;
+    private static readonly object SettleGate = new();
+
     private readonly IStockSimDataStore _db;
     private readonly PerStockStrategyService _perStockStrategy;
     private readonly IStockSuggestProvider _suggest;
@@ -78,6 +81,14 @@ public class StockPoolAppService
     /// </summary>
     public async Task<int> SettleNextDayRiseAsync(DateTime localNow, CancellationToken ct = default)
     {
+        // 池页高频打开：5 分钟内最多跑一轮，避免每次 Index 串行打东财
+        lock (SettleGate)
+        {
+            if (DateTime.UtcNow - _lastSettleUtc < TimeSpan.FromMinutes(5))
+                return 0;
+            _lastSettleUtc = DateTime.UtcNow;
+        }
+
         var candidates = await _db.StockPoolItems
             .Where(i => i.TradeStyle == StockTradeStyle.NextDayRise
                         && i.PredictedRiseDate != null)
@@ -85,6 +96,8 @@ public class StockPoolAppService
         if (candidates.Count == 0) return 0;
 
         var settled = 0;
+        var fetched = 0;
+        const int maxFetchPerRun = 3; // 单次最多拉 3 只详情，其余留给后台下次
         foreach (var item in candidates)
         {
             var target = item.PredictedRiseDate!.Value.Date;
@@ -100,9 +113,13 @@ public class StockPoolAppService
                 continue;
             }
 
+            if (fetched >= maxFetchPerRun)
+                break;
+
             StockDetailBundle? detail;
             try
             {
+                fetched++;
                 detail = await _detailProvider.GetDetailAsync(item.Symbol, item.Name, ct);
             }
             catch (Exception ex)

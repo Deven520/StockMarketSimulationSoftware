@@ -157,12 +157,17 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         {
             runtime.State = TState.ForceFlat;
             var flat = EvaluateForceFlat(
-                ctx, quote, position, runtime, tradeQty, pathTag, id, poolId, slipBps);
+                ctx, quote, position, runtime, tradeQty, pathTag, id, poolId, slipBps,
+                relaxClose: dayLossHit);
             if (flat.Action != SignalAction.None || !riskHaltHit || hasOpenTLeg)
                 return flat;
         }
 
-        // RiskHalt：仅允许关 OpenT / SoldHigh 低吸（不追高）；禁止新开
+        // 残腿优先：Idle 却仍有 OpenT → 归一为 SoldHigh，禁止新开卖腿
+        if (hasOpenTLeg && runtime.State == TState.Idle && !forceFlatWindow)
+            runtime.State = TState.SoldHigh;
+
+        // RiskHalt：仅允许关 OpenT / SoldHigh 低吸；日亏时放宽买回带，禁止新开
         if (riskHaltHit && runtime.State == TState.RiskHalt)
         {
             if (hasOpenTLeg)
@@ -171,7 +176,8 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                     ctx, quote, position, runtime, tradeQty, pathTag, id, poolId, slipBps,
                     reasonPrefix: dayLossHit
                         ? $"日亏 {dayLossPct:F2}% 停机后仅关OpenT"
-                        : "风控停机后仅关OpenT");
+                        : "风控停机后仅关OpenT",
+                    relaxClose: dayLossHit);
                 if (close.Action == SignalAction.Buy)
                     return close;
                 return None(quote.Symbol, id, poolId,
@@ -199,18 +205,21 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                         : $"{pathTag}BlockNewT 观望");
         }
 
-        // SoldHigh → 低吸买回（不追高；逼近预测高则放弃死等）
+        // SoldHigh → 低吸买回（不追高；强势日不因近预测高放弃）
         if (runtime.State == TState.SoldHigh)
         {
             var ask = QuotePriceGuard.SafeAsk(quote);
-            if (runtime.LastSellPrice is > 0 && ask > runtime.LastSellPrice.Value)
+            if (runtime.LastSellPrice is > 0 && ask > runtime.LastSellPrice.Value
+                && !dayLossHit)
                 return None(quote.Symbol, id, poolId, $"{pathTag}SoldHigh 现价高于卖出价，不追买");
 
-            if (IsNearPredictedHigh(ctx.Policy.Forecast, ask))
+            if (!ShouldSkipNearPredictedHighAbandon(ctx, eff)
+                && IsNearPredictedHigh(ctx.Policy.Forecast, ask))
                 return None(quote.Symbol, id, poolId, $"{pathTag}SoldHigh 逼近预测高，放弃低吸等待");
 
-            if (deviation <= eff.BuyDeviationPct && volOk
-                && CanCloseOpenTAtPrice(ask, runtime.LastSellPrice, slipBps))
+            var closeOk = CanCloseOpenTAtPrice(
+                ask, runtime.LastSellPrice, slipBps, relaxForDayLoss: dayLossHit);
+            if (deviation <= eff.BuyDeviationPct && volOk && closeOk)
             {
                 var (ok, qty, softNote) = ApplySoftBand(ctx, tradeQty, forSell: false);
                 if (!ok)
@@ -274,6 +283,18 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
             if (riskHaltHit)
                 return None(quote.Symbol, id, poolId, $"{pathTag}日亏停机后禁止新开T");
 
+            // 残腿未清：Idle 不得新开卖；仅允许补回 OpenT/底仓缺口
+            if (hasOpenTLeg)
+            {
+                var close = TryCloseOpenTLeg(
+                    ctx, quote, position, runtime, tradeQty, pathTag, id, poolId, slipBps,
+                    reasonPrefix: "残腿优先买回",
+                    relaxClose: false);
+                if (close.Action == SignalAction.Buy)
+                    return close;
+                return None(quote.Symbol, id, poolId, $"{pathTag}残腿未平，禁止新开卖腿");
+            }
+
             var pathReady = IsPathReadyForNewT(runtime, eff);
             var isMomentum = string.Equals(eff.Style, "momentum_t", StringComparison.OrdinalIgnoreCase);
             var isHighGo = isMomentum
@@ -318,6 +339,7 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                 }
             }
 
+            // 仅补 SoldHigh/OpenT 缺口；无缺口时不做「裸补底仓」烧手续费（含 BlockNewT）
             if (deviation <= eff.BuyDeviationPct && volOk && HasSoldHighDeficit(position))
             {
                 var (ok, qty, softNote) = ApplySoftBand(ctx, tradeQty, forSell: false);
@@ -325,8 +347,11 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
                     return None(quote.Symbol, id, poolId, $"{pathTag}{softNote}");
 
                 qty = CapBuyToOpenT(qty, runtime);
+                var tag = eff.BlockNewT || runtime.ForceFlatExcessReduced
+                    ? "BlockNewT下仅补SoldHigh缺口"
+                    : "补回底仓";
                 var buy = TryBuyBack(quote, position, qty, eff, id, poolId,
-                    $"{pathTag}补回底仓 偏离 {deviation:F2}%{softNote}");
+                    $"{pathTag}{tag} 偏离 {deviation:F2}%{softNote}");
                 if (buy.Action == SignalAction.Buy)
                 {
                     runtime.State = TState.Idle;
@@ -390,13 +415,14 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         string pathTag,
         Guid id,
         Guid? poolId,
-        decimal slipBps)
+        decimal slipBps,
+        bool relaxClose = false)
     {
         var qtyNow = position?.Quantity ?? 0;
         var baseNow = position?.BaseQuantity ?? 0;
         var excess = qtyNow - baseNow;
 
-        // 1) 优先减超配到 Base（可不计 OpenT）；尽量一次对齐手数
+        // 1) 优先减超配到 Base（不计 OpenT）；减完禁新开，禁止随后空转买回
         if (excess >= 100)
         {
             var sellQty = AlignLot(excess);
@@ -418,12 +444,13 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
             return None(quote.Symbol, id, poolId, $"{pathTag}ForceFlat 超配已减，禁止买回");
         }
 
-        // 2) 关 OpenT：不追高；价不满足则留待次日
+        // 2) 关 OpenT：不追高；须满足扣费边距；价不满足则留待次日（日亏时略放宽）
         if (runtime.OpenTQty >= 100 || HasSoldHighDeficit(position))
         {
             return TryCloseOpenTLeg(
                 ctx, quote, position, runtime, tradeQty, pathTag, id, poolId, slipBps,
-                reasonPrefix: "收盘前买回");
+                reasonPrefix: "收盘前买回",
+                relaxClose: relaxClose);
         }
 
         return None(quote.Symbol, id, poolId, $"{pathTag}ForceFlat 无需动作");
@@ -439,18 +466,21 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         Guid id,
         Guid? poolId,
         decimal slipBps,
-        string reasonPrefix)
+        string reasonPrefix,
+        bool relaxClose = false)
     {
         var ask = QuotePriceGuard.SafeAsk(quote);
-        if (runtime.LastSellPrice is > 0 && ask > runtime.LastSellPrice.Value)
+        if (runtime.LastSellPrice is > 0 && ask > runtime.LastSellPrice.Value && !relaxClose)
             return None(quote.Symbol, id, poolId,
                 $"{pathTag}{reasonPrefix} 现价高于卖出价，留待次日");
 
-        if (!CanCloseOpenTAtPrice(ask, runtime.LastSellPrice, slipBps))
+        if (!CanCloseOpenTAtPrice(ask, runtime.LastSellPrice, slipBps, relaxForDayLoss: relaxClose))
             return None(quote.Symbol, id, poolId,
                 $"{pathTag}{reasonPrefix} 买回价过高(>{runtime.LastSellPrice:F2}扣费差)，留待次日");
 
-        if (IsNearPredictedHigh(ctx.Policy.Forecast, ask)
+        if (!relaxClose
+            && !ShouldSkipNearPredictedHighAbandon(ctx, ctx.Effective)
+            && IsNearPredictedHigh(ctx.Policy.Forecast, ask)
             && runtime.LastSellPrice is > 0
             && ask > runtime.LastSellPrice.Value * 0.995m)
         {
@@ -472,14 +502,38 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         return buy;
     }
 
-    /// <summary>OpenT 买回：现价须 ≤ 卖出价×(1−滑点bps)，避免追高补仓。</summary>
-    private static bool CanCloseOpenTAtPrice(decimal ask, decimal? lastSell, decimal maxSlippageBps)
+    /// <summary>
+    /// OpenT 买回：现价须 ≤ 卖出价×(1−滑点bps)；日亏停机放宽至卖出价+0.3%，避免死等惨案。
+    /// </summary>
+    private static bool CanCloseOpenTAtPrice(
+        decimal ask,
+        decimal? lastSell,
+        decimal maxSlippageBps,
+        bool relaxForDayLoss = false)
     {
         if (ask <= 0) return false;
         if (lastSell is null or <= 0) return true;
+        if (relaxForDayLoss)
+            return ask <= lastSell.Value * 1.003m;
         var bps = Math.Max(0m, maxSlippageBps);
+        // 叠加最低回合边距：买回至少低于卖出价 MinRoundTrip 一半对应价差
         var maxAsk = lastSell.Value * (1m - bps / 10_000m);
         return ask <= maxAsk;
+    }
+
+    private static bool ShouldSkipNearPredictedHighAbandon(
+        EvaluateContext ctx, EffectiveStrategyParams eff)
+    {
+        if (eff.SkipNearPredictedHighAbandon) return true;
+        return IsStrongTrendDay(ctx, eff);
+    }
+
+    private static bool IsStrongTrendDay(EvaluateContext ctx, EffectiveStrategyParams eff)
+    {
+        var label = eff.PathLabel ?? "";
+        if (label.Contains("HighGo", StringComparison.OrdinalIgnoreCase)) return true;
+        if (ctx.Quote.ChangePercent >= 7m) return true;
+        return false;
     }
 
     private static bool IsNearPredictedHigh(ForecastPolicy? forecast, decimal lastPrice)
@@ -501,7 +555,8 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
             forSell,
             PriceForecastMetrics.ForecastSoftBandRatio,
             out var msg,
-            referencePrice: refPx);
+            referencePrice: refPx,
+            avgCombinedAccuracyPct: ctx.Policy.Forecast?.RecentCombinedAccuracyPct);
 
         if (verdict == SoftBandVerdict.Block)
             return (false, tradeQty, msg ?? "预测软边界拦截");
@@ -642,14 +697,18 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
             forSell: true,
             PriceForecastMetrics.ForecastSoftBandRatio,
             out _,
-            referencePrice: refPx);
+            referencePrice: refPx,
+            avgCombinedAccuracyPct: ctx.Policy.Forecast?.RecentCombinedAccuracyPct);
         return verdict == SoftBandVerdict.Pass;
     }
 
-    /// <summary>开腿前：期望可捕获价差（偏离带×0.35）扣双边费粗估后须 ≥ MinRoundTripEdgeBps。</summary>
+    /// <summary>
+    /// 开腿前经济性：毛捕获（偏离带×0.35）须 ≥ 约 2×双边费，且净 bps ≥ MinRoundTripEdgeBps。
+    /// 专治「+25 价差被 40 手续费吃掉」类空转。
+    /// </summary>
     private static bool HasMinRoundTripEdge(decimal price, int qty, EffectiveStrategyParams eff)
     {
-        if (eff.MinRoundTripEdgeBps <= 0) return true;
+        if (eff.MinRoundTripEdgeBps < 0) return true;
         if (price <= 0 || qty < 100) return false;
 
         var bandPct = Math.Abs(eff.SellDeviationPct) + Math.Abs(eff.BuyDeviationPct);
@@ -657,8 +716,11 @@ public sealed class IntradayTStrategyEvaluator : IStrategyEvaluator
         var notional = price * qty;
         // A股往返粗估：佣金万三×2 + 印花卖万五 + 过户/滑点 ≈ 11bps，小额单抬高最低佣金影响
         var feeBps = notional < 20_000m ? 18m : 11m;
+        if (expectedCaptureBps < feeBps * 2m)
+            return false;
         var netBps = expectedCaptureBps - feeBps;
-        return netBps >= eff.MinRoundTripEdgeBps;
+        var minNet = Math.Max(0m, eff.MinRoundTripEdgeBps);
+        return netBps >= minNet;
     }
 
     private static TradeSignal TrySellHigh(

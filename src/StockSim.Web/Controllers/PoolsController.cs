@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using StockSim.Application.Dtos;
 using StockSim.Application.Services;
 using StockSim.Application.Services.Alerts;
@@ -21,6 +22,8 @@ public class PoolsController : Controller
     private readonly IStockSuggestProvider _suggest;
     private readonly ITradeAlertNotifier _alerts;
     private readonly IStockSimDataStore _db;
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<PoolsController> _logger;
 
     public PoolsController(
         StockPoolAppService pools,
@@ -32,7 +35,9 @@ public class PoolsController : Controller
         NextDayPickReviewAppService nextDayPickReviews,
         IStockSuggestProvider suggest,
         ITradeAlertNotifier alerts,
-        IStockSimDataStore db)
+        IStockSimDataStore db,
+        IServiceScopeFactory scopeFactory,
+        ILogger<PoolsController> logger)
     {
         _pools = pools;
         _stockDetails = stockDetails;
@@ -44,18 +49,37 @@ public class PoolsController : Controller
         _suggest = suggest;
         _alerts = alerts;
         _db = db;
+        _scopeFactory = scopeFactory;
+        _logger = logger;
     }
 
     /// <summary>股票池即成分页（无池列表主页）。</summary>
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         var pool = await _pools.GetOrCreateDefaultPoolAsync(ct);
-        // 收盘后打开池页即尝试结算次日预涨（幂等）
-        await _pools.SettleNextDayRiseAsync(DateTime.Now, ct);
+        // 次日预涨结算放到后台，避免每次打开池页串行打东财拖慢首屏
+        ScheduleBackgroundSettle();
         ViewData["Title"] = "股票池";
         ViewBag.PoolId = pool.Id;
         ViewBag.PoolName = pool.Name;
         return View("Details", await _stockDetails.GetPoolStockRowsAsync(pool.Id, ct));
+    }
+
+    private void ScheduleBackgroundSettle()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var pools = scope.ServiceProvider.GetRequiredService<StockPoolAppService>();
+                await pools.SettleNextDayRiseAsync(DateTime.Now, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Background NextDayRise settle failed");
+            }
+        });
     }
 
     /// <summary>兼容旧链接 /Pools/Details/{id} → 统一进成分页。</summary>
@@ -79,6 +103,24 @@ public class PoolsController : Controller
         }));
     }
 
+    /// <summary>探测东方财富行情是否正常（按钮触发）。</summary>
+    [HttpGet]
+    public async Task<IActionResult> EastMoneyHealth(string? symbol, CancellationToken ct)
+    {
+        var health = await _stockDetails.ProbeEastMoneyAsync(symbol ?? "000001", ct);
+        return Json(new
+        {
+            ok = health.Ok,
+            status = health.StatusText,
+            probeSymbol = health.ProbeSymbol,
+            probeName = health.ProbeName,
+            last = health.Last,
+            latencyMs = health.LatencyMs,
+            message = health.Message,
+            checkedAt = health.CheckedAt.ToString("HH:mm:ss")
+        });
+    }
+
     /// <summary>个股详情面板（同花顺风格摘要：日K/分时/资金/估值 + 策略运行状态）。</summary>
     public async Task<IActionResult> Stock(
         string symbol,
@@ -88,6 +130,25 @@ public class PoolsController : Controller
         int pageSize = 10,
         CancellationToken ct = default)
     {
+        // 清假预测不阻塞首屏
+        if (!string.IsNullOrWhiteSpace(symbol))
+        {
+            var sym = symbol.Trim();
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var perStock = scope.ServiceProvider.GetRequiredService<PerStockStrategyService>();
+                    await perStock.PurgeImplausibleForecastArtifactsAsync(sym, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Background purge implausible forecasts failed for {Symbol}", sym);
+                }
+            });
+        }
+
         var page = await _stockDetails.GetStockDetailPageAsync(symbol, poolId, null, ct);
         if (page is null) return NotFound();
         ViewData["Title"] = $"{page.Bundle.Board.Name}({page.Bundle.Board.Symbol})";

@@ -14,6 +14,9 @@
         代码或名称填其一即可（支持模糊联想）；入池先挂默认策略，后台异步 AI 优化。
         每股初始资金 20 万，开市连续竞价自动高卖低买。可对单股开启「成交通知」。时段：@session
         <span id="quoteStatus" class="ms-2 text-muted">行情加载中…</span>
+        <span class="ms-2">东财：</span>
+        <span id="emHealthBadge" class="badge text-bg-secondary">未检测</span>
+        <span id="emHealthDetail" class="ms-1 text-muted"></span>
     </div>
 </div>
 
@@ -52,6 +55,10 @@
             <div class="col-auto"><input type="file" name="file" class="form-control" accept=".csv" required /></div>
             <div class="col-auto"><button class="btn btn-outline-secondary">CSV导入</button></div>
         </form>
+    </div>
+    <div class="col-auto">
+        <button type="button" id="btnEmHealth" class="btn btn-outline-success"
+                title="探测东方财富轻量报价是否可用（默认测 000001）">检查东财行情</button>
     </div>
     <div class="col-auto">
         <form asp-action="TestNotify" method="post" class="d-inline">
@@ -493,6 +500,64 @@
         if (value == null) { el.classList.add('text-muted'); return; }
         el.classList.add(value >= 0 ? 'text-danger' : 'text-success');
     }
+
+    const emBadge = document.getElementById('emHealthBadge');
+    const emDetail = document.getElementById('emHealthDetail');
+    const btnEm = document.getElementById('btnEmHealth');
+
+    function paintEmHealth(data) {
+        if (!emBadge) return;
+        emBadge.classList.remove('text-bg-secondary', 'text-bg-success', 'text-bg-danger', 'text-bg-warning');
+        if (!data) {
+            emBadge.classList.add('text-bg-secondary');
+            emBadge.textContent = '未检测';
+            if (emDetail) emDetail.textContent = '';
+            return;
+        }
+        emBadge.classList.add(data.ok ? 'text-bg-success' : 'text-bg-danger');
+        emBadge.textContent = data.status || (data.ok ? '正常' : '异常');
+        if (emDetail) {
+            const name = data.probeName ? `${data.probeName}(${data.probeSymbol})` : (data.probeSymbol || '');
+            const last = data.last != null ? ` 价${Number(data.last).toFixed(2)}` : '';
+            emDetail.textContent = `${name}${last} · ${data.latencyMs}ms · ${data.message || ''} · ${data.checkedAt || ''}`;
+        }
+    }
+
+    async function checkEastMoneyHealth() {
+        if (btnEm) {
+            btnEm.disabled = true;
+            btnEm.textContent = '检测中…';
+        }
+        if (emBadge) {
+            emBadge.classList.remove('text-bg-success', 'text-bg-danger');
+            emBadge.classList.add('text-bg-warning');
+            emBadge.textContent = '检测中';
+        }
+        try {
+            const res = await fetch('/Pools/EastMoneyHealth?symbol=000001', { headers: { 'Accept': 'application/json' } });
+            if (!res.ok) throw new Error('http ' + res.status);
+            const data = await res.json();
+            paintEmHealth(data);
+        } catch (e) {
+            paintEmHealth({
+                ok: false,
+                status: '异常',
+                probeSymbol: '000001',
+                message: '请求失败：' + (e && e.message ? e.message : e),
+                latencyMs: 0,
+                checkedAt: new Date().toLocaleTimeString()
+            });
+        } finally {
+            if (btnEm) {
+                btnEm.disabled = false;
+                btnEm.textContent = '检查东财行情';
+            }
+        }
+    }
+
+    if (btnEm) btnEm.addEventListener('click', checkEastMoneyHealth);
+    // 进入池页自动轻量探测一次，便于一眼看到正常/异常
+    checkEastMoneyHealth();
 
     async function refreshQuotes() {
         try {

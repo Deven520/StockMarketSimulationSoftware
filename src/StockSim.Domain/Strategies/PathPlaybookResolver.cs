@@ -91,6 +91,9 @@ public static class PathPlaybookResolver
             filter = PathFilterAction.BlockNewT;
         else if (regime == IntradayPathRegime.LowOpenLowGo && idx <= -0.8m)
             filter = PathFilterAction.BlockNewT;
+        // LowOpenLowGo 但指数明显反弹 → 解锁新开，避免「弱势锁死后反弹整段空过」
+        else if (regime == IntradayPathRegime.LowOpenLowGo && idx >= 0.6m)
+            filter = PathFilterAction.Confirm;
 
         return filter switch
         {
@@ -103,8 +106,11 @@ public static class PathPlaybookResolver
                 SellThresholdScale = playbook.SellThresholdScale,
                 BuyThresholdScale = playbook.BuyThresholdScale,
                 SizeScale = Math.Min(1.25m, playbook.SizeScale * 1.1m),
-                BlockNewT = playbook.BlockNewT,
-                Label = playbook.Label + "+Confirm"
+                // 指数反弹确认时解除 LowOpenLowGo 默认 BlockNewT
+                BlockNewT = regime == IntradayPathRegime.LowOpenLowGo ? false : playbook.BlockNewT,
+                Label = playbook.Label + (regime == IntradayPathRegime.LowOpenLowGo
+                    ? "+ReboundUnlock"
+                    : "+Confirm")
             },
             PathFilterAction.Weaken => new Playbook
             {

@@ -17,13 +17,19 @@ public static class PriceForecastMetrics
     public static readonly TimeSpan MarketCloseTime = new(15, 0, 0);
 
     /// <summary>对账回看自然日上限（含已 Evaluated 的纠错重算）。</summary>
-    public const int EvaluationLookbackDays = 14;
+    public const int EvaluationLookbackDays = 28;
 
     /// <summary>ATR 基线默认周期。</summary>
     public const int DefaultAtrPeriod = 14;
 
-    /// <summary>ATR 倍数：预测高/低 = 参考价 ± ATR×倍数。</summary>
+    /// <summary>ATR 倍数：预测高/低 = 参考价 ± ATR×倍数（基线不对称另见 TryBuildAtrBaseline）。</summary>
     public const decimal DefaultAtrMultiplier = 1.0m;
+
+    /// <summary>可达上沿：相对参考价最多 +ATR×此倍数（再与涨跌停取更严）。</summary>
+    public const decimal ReachableHighAtrMultiple = 1.35m;
+
+    /// <summary>可达下沿：相对参考价最多 −ATR×此倍数。</summary>
+    public const decimal ReachableLowAtrMultiple = 1.25m;
 
     /// <summary>做 T 软边界：卖出须进入预测区间上沿比例，买入须进入下沿比例。</summary>
     public const decimal ForecastSoftBandRatio = 0.35m;
@@ -34,15 +40,26 @@ public static class PriceForecastMetrics
     /// <summary>对账偏差绝对值超过此值视为异常样本，不计入准确率。</summary>
     public const decimal OutlierAbsDeviationPct = 30m;
 
-    /// <summary>偏差校准最少有效样本数。</summary>
-    public const int MinCalibrationSamples = 5;
+    /// <summary>完整偏差校准最少有效样本数。</summary>
+    public const int MinCalibrationSamples = 4;
+
+    /// <summary>仅纠高估上沿的最少样本。</summary>
+    public const int SoftHighTightenMinSamples = 3;
 
     /// <summary>单次校准允许的最大均值偏差幅度（%）。</summary>
-    public const decimal MaxCalibrationAdjustPct = 5m;
+    public const decimal MaxCalibrationAdjustPct = 6m;
 
     /// <summary>预测区间相对 ATR 的最小/最大带宽倍数。</summary>
-    public const decimal MinAtrBandMultiple = 0.6m;
-    public const decimal MaxAtrBandMultiple = 1.8m;
+    public const decimal MinAtrBandMultiple = 0.55m;
+    public const decimal MaxAtrBandMultiple = 1.55m;
+
+    /// <summary>预测视野：开盘前次日 vs 盘中当日（校准须分桶）。</summary>
+    public enum ForecastHorizon
+    {
+        NextDay = 0,
+        SameDay = 1,
+        Other = 2
+    }
 
     /// <summary>默认相对昨收的涨跌幅硬钳制（%）；创业板/科创可更高。</summary>
     public const decimal DefaultLimitCapPct = 12m;
@@ -185,13 +202,29 @@ public static class PriceForecastMetrics
         => Math.Abs(highDeviationPct) >= OutlierAbsDeviationPct
            || Math.Abs(lowDeviationPct) >= OutlierAbsDeviationPct;
 
-    /// <summary>由近史 AI 综合分决定与 ATR 融合时的 AI 权重。</summary>
+    /// <summary>由近史 AI 综合分决定与 ATR 融合时的 AI 权重（历史显示无样本时不宜过信 AI）。</summary>
     public static decimal ResolveAiBlendWeight(decimal? avgCombinedAccuracyPct)
     {
-        if (avgCombinedAccuracyPct is null) return 0.7m;
-        if (avgCombinedAccuracyPct.Value < LowAccuracyDeweightThreshold) return 0.35m;
-        if (avgCombinedAccuracyPct.Value < 60m) return 0.5m;
-        return 0.75m;
+        if (avgCombinedAccuracyPct is null) return 0.55m;
+        if (avgCombinedAccuracyPct.Value < LowAccuracyDeweightThreshold) return 0.28m;
+        if (avgCombinedAccuracyPct.Value < 55m) return 0.42m;
+        if (avgCombinedAccuracyPct.Value < 70m) return 0.58m;
+        return 0.72m;
+    }
+
+    /// <summary>
+    /// 按 PredictedAt 相对目标日开盘划分视野。
+    /// 目标日前 → NextDay；目标日 15:00 前 → SameDay；其余 Other。
+    /// </summary>
+    public static ForecastHorizon ClassifyForecastHorizon(DateTime predictedAt, DateTime forecastForDate)
+    {
+        var forDate = forecastForDate.Date;
+        var at = predictedAt;
+        if (at.Date < forDate) return ForecastHorizon.NextDay;
+        if (at.Date == forDate && at.TimeOfDay < MarketCloseTime) return ForecastHorizon.SameDay;
+        // 收盘后预测「当日」实际已无交易意义，归 Other，避免污染次日校准
+        if (at.Date == forDate) return ForecastHorizon.Other;
+        return ForecastHorizon.Other;
     }
 
     public static ForecastSource ParseSource(string? source, bool? countsTowardAccuracy = null)
@@ -259,9 +292,18 @@ public static class PriceForecastMetrics
         var refPrice = hist[^1].Close;
         if (refPrice <= 0) return null;
 
-        var band = Math.Round(atr.Value * multiplier, 4);
-        var high = Math.Round(refPrice + band, 2);
-        var low = Math.Round(Math.Max(0.01m, refPrice - band), 2);
+        // 不对称：上沿略宽于下沿（历史常见高估上沿/低估下沿，基线先别对称放大误差）
+        var highBand = Math.Round(atr.Value * multiplier * 1.05m, 4);
+        var lowBand = Math.Round(atr.Value * multiplier * 0.95m, 4);
+        // 隔夜跳空：昨高低相对收盘的外延，温和并入
+        var last = hist[^1];
+        if (last.High > refPrice)
+            highBand = Math.Max(highBand, Math.Round((last.High - refPrice) * 0.35m, 4));
+        if (last.Low < refPrice && last.Low > 0)
+            lowBand = Math.Max(lowBand, Math.Round((refPrice - last.Low) * 0.35m, 4));
+
+        var high = Math.Round(refPrice + highBand, 2);
+        var low = Math.Round(Math.Max(0.01m, refPrice - lowBand), 2);
 
         return new ForecastPolicy
         {
@@ -269,7 +311,8 @@ public static class PriceForecastMetrics
             PredictedHigh = high,
             PredictedLow = low,
             AsOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-            Rationale = $"ATR{period}×{multiplier:0.##} 基线：参考收盘 {refPrice:F2}，ATR={atr:F4}",
+            Rationale =
+                $"ATR{period}不对称基线：参考收盘 {refPrice:F2}，ATR={atr:F4}，上+{highBand:F3}/下−{lowBand:F3}",
             Source = ToSourceKey(ForecastSource.AtrBaseline),
             CountsTowardAccuracy = false
         };
@@ -297,22 +340,32 @@ public static class PriceForecastMetrics
         low = Math.Max(low, minLow);
         if (high < low) (high, low) = (low, high);
 
+        // ATR 可达包络：禁止把上沿拉到「涨停级」却远超近史波动（历史主因：高估高）
         if (atr is > 0)
         {
+            var reachHigh = Math.Round(referencePrice + atr.Value * ReachableHighAtrMultiple, 2);
+            var reachLow = Math.Round(Math.Max(0.01m, referencePrice - atr.Value * ReachableLowAtrMultiple), 2);
+            high = Math.Min(high, Math.Min(maxHigh, reachHigh));
+            low = Math.Max(low, Math.Max(minLow, reachLow));
+            if (high < low) (high, low) = (low, high);
+
             var width = high - low;
             var minW = Math.Round(atr.Value * MinAtrBandMultiple, 2);
             var maxW = Math.Round(atr.Value * MaxAtrBandMultiple, 2);
             if (width < minW)
             {
                 var mid = (high + low) / 2m;
-                high = Math.Round(Math.Min(maxHigh, mid + minW / 2m), 2);
-                low = Math.Round(Math.Max(minLow, mid - minW / 2m), 2);
+                high = Math.Round(Math.Min(maxHigh, Math.Min(reachHigh, mid + minW / 2m)), 2);
+                low = Math.Round(Math.Max(minLow, Math.Max(reachLow, mid - minW / 2m)), 2);
             }
             else if (width > maxW)
             {
-                var mid = (high + low) / 2m;
-                high = Math.Round(Math.Min(maxHigh, mid + maxW / 2m), 2);
-                low = Math.Round(Math.Max(minLow, mid - maxW / 2m), 2);
+                // 收带宽时优先压上沿（历史 biasH>0 更常见），下沿少抬以免虚低
+                var overflow = width - maxW;
+                high = Math.Round(Math.Max(low + minW, high - overflow * 0.65m), 2);
+                low = Math.Round(Math.Min(high - minW, low + overflow * 0.35m), 2);
+                high = Math.Min(high, Math.Min(maxHigh, reachHigh));
+                low = Math.Max(low, Math.Max(minLow, reachLow));
             }
         }
 
@@ -325,7 +378,7 @@ public static class PriceForecastMetrics
         forecast.PredictedHigh = high;
         forecast.PredictedLow = low;
         forecast.Rationale = (forecast.Rationale ?? string.Empty)
-            + $" | 硬钳制 ref={referencePrice:F2} cap±{capPct:0.#}%";
+            + $" | 硬钳制 ref={referencePrice:F2} cap±{capPct:0.#}% atrReach";
         forecast.CapHighByLimitPct = capPct;
         return forecast;
     }
@@ -354,7 +407,8 @@ public static class PriceForecastMetrics
                 : ToSourceKey(ForecastSource.Ai),
             CountsTowardAccuracy = true,
             SoftBandMode = string.IsNullOrWhiteSpace(ai.SoftBandMode) ? "softPrefer" : ai.SoftBandMode,
-            CapHighByLimitPct = ai.CapHighByLimitPct > 0 ? ai.CapHighByLimitPct : DefaultLimitCapPct
+            CapHighByLimitPct = ai.CapHighByLimitPct > 0 ? ai.CapHighByLimitPct : DefaultLimitCapPct,
+            RecentCombinedAccuracyPct = ai.RecentCombinedAccuracyPct
         };
     }
 
@@ -389,12 +443,13 @@ public static class PriceForecastMetrics
 
     /// <summary>
     /// 用历史高/低偏差校准：predicted' = predicted / (1 + meanDev%/100)。
-    /// 偏差会先钳制在 ±MaxCalibrationAdjustPct，避免越校越歪。
+    /// strength∈(0,1] 用于 SameDay 样本降权；|偏|&lt;0.5% 的一侧不改，避免过校。
     /// </summary>
     public static ForecastPolicy ApplyBiasCalibration(
         ForecastPolicy forecast,
         decimal meanHighDeviationPct,
-        decimal meanLowDeviationPct)
+        decimal meanLowDeviationPct,
+        decimal strength = 1m)
     {
         static decimal Correct(decimal predicted, decimal meanDevPct)
         {
@@ -405,10 +460,19 @@ public static class PriceForecastMetrics
             return Math.Round(predicted / factor, 2);
         }
 
-        var highDev = Math.Clamp(meanHighDeviationPct, -MaxCalibrationAdjustPct, MaxCalibrationAdjustPct);
-        var lowDev = Math.Clamp(meanLowDeviationPct, -MaxCalibrationAdjustPct, MaxCalibrationAdjustPct);
-        var high = Correct(forecast.PredictedHigh, highDev);
-        var low = Correct(forecast.PredictedLow, lowDev);
+        var s = Math.Clamp(strength, 0.2m, 1m);
+        var rawHigh = meanHighDeviationPct * s;
+        var rawLow = meanLowDeviationPct * s;
+        // 分侧：噪声带内不动
+        var highDev = Math.Abs(rawHigh) >= 0.5m
+            ? Math.Clamp(rawHigh, -MaxCalibrationAdjustPct, MaxCalibrationAdjustPct)
+            : 0m;
+        var lowDev = Math.Abs(rawLow) >= 0.5m
+            ? Math.Clamp(rawLow, -MaxCalibrationAdjustPct, MaxCalibrationAdjustPct)
+            : 0m;
+
+        var high = highDev == 0m ? forecast.PredictedHigh : Correct(forecast.PredictedHigh, highDev);
+        var low = lowDev == 0m ? forecast.PredictedLow : Correct(forecast.PredictedLow, lowDev);
         if (high < low) (high, low) = (low, high);
 
         return new ForecastPolicy
@@ -418,18 +482,54 @@ public static class PriceForecastMetrics
             PredictedLow = low,
             AsOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
             Rationale = (forecast.Rationale ?? string.Empty)
-                        + $" | 偏差校准 highDev̄={highDev:F2}% lowDev̄={lowDev:F2}% (≤±{MaxCalibrationAdjustPct:0.#}%)",
+                        + $" | 偏差校准 highDev̄={highDev:F2}% lowDev̄={lowDev:F2}% ×{s:F2} (≤±{MaxCalibrationAdjustPct:0.#}%)",
             Source = ToSourceKey(ForecastSource.CalibratedAi),
             CountsTowardAccuracy = true,
             SoftBandMode = string.IsNullOrWhiteSpace(forecast.SoftBandMode) ? "softPrefer" : forecast.SoftBandMode,
-            CapHighByLimitPct = forecast.CapHighByLimitPct > 0 ? forecast.CapHighByLimitPct : DefaultLimitCapPct
+            CapHighByLimitPct = forecast.CapHighByLimitPct > 0 ? forecast.CapHighByLimitPct : DefaultLimitCapPct,
+            RecentCombinedAccuracyPct = forecast.RecentCombinedAccuracyPct
         };
+    }
+
+    /// <summary>仅压高估上沿（样本不足做全校准、但历史明显虚高时）。</summary>
+    public static ForecastPolicy TightenOverestimatedHigh(
+        ForecastPolicy forecast,
+        decimal meanHighDeviationPct,
+        decimal strength = 0.55m)
+    {
+        if (forecast.PredictedHigh <= 0 || meanHighDeviationPct < 0.8m)
+            return forecast;
+        return ApplyBiasCalibration(forecast, meanHighDeviationPct, 0m, strength);
     }
 
     /// <summary>样本充足且偏差非零才建议校准。</summary>
     public static bool ShouldApplyCalibration(int sampleCount, decimal meanHighDev, decimal meanLowDev)
         => sampleCount >= MinCalibrationSamples
-           && (Math.Abs(meanHighDev) >= 0.05m || Math.Abs(meanLowDev) >= 0.05m);
+           && (Math.Abs(meanHighDev) >= 0.5m || Math.Abs(meanLowDev) >= 0.5m);
+
+    /// <summary>样本较少但上沿系统性虚高 → 轻量压高。</summary>
+    public static bool ShouldTightenHighOnly(int sampleCount, decimal meanHighDev)
+        => sampleCount >= SoftHighTightenMinSamples
+           && sampleCount < MinCalibrationSamples
+           && meanHighDev >= 0.8m;
+
+    /// <summary>
+    /// 预测中枢是否相对参考价（近史真实价）可信。
+    /// 用于拦截「东方财富回退模拟价≈几十元、真股≈一两百」类假数据污染。
+    /// </summary>
+    public static bool IsForecastPriceLevelPlausible(
+        decimal predictedHigh,
+        decimal predictedLow,
+        decimal referencePrice,
+        decimal maxRelDeviation = 0.45m)
+    {
+        if (referencePrice <= 0 || predictedHigh <= 0 || predictedLow <= 0)
+            return true;
+        var mid = (Math.Max(predictedHigh, predictedLow) + Math.Min(predictedHigh, predictedLow)) / 2m;
+        var lo = referencePrice * (1m - maxRelDeviation);
+        var hi = referencePrice * (1m + maxRelDeviation);
+        return mid >= lo && mid <= hi;
+    }
 
     /// <summary>softPrefer 未入带时的默认缩仓系数。</summary>
     public const decimal SoftPreferShrinkScale = 0.6m;
@@ -515,8 +615,11 @@ public static class PriceForecastMetrics
         if (range <= 0) return SoftBandVerdict.Pass;
 
         var ratio = Math.Clamp(bandRatio, 0.05m, 0.5m);
-        if (avgCombinedAccuracyPct is < LowAccuracyDeweightThreshold)
+        var acc = avgCombinedAccuracyPct ?? forecast.RecentCombinedAccuracyPct;
+        if (acc is < LowAccuracyDeweightThreshold)
             ratio = Math.Min(0.5m, ratio + 0.15m);
+        else if (acc is < 55m)
+            ratio = Math.Min(0.5m, ratio + 0.08m);
 
         // 已显著跌破预测低：低吸软边界视为失效放行（避免锚在错误预测低上）
         if (!forSell && IsForecastLowBroken(forecast, lastPrice))

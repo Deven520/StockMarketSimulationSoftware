@@ -262,7 +262,7 @@
             </div>
             <div class="px-2"><partial name="_Pager" model="forecastPager" /></div>
             <div class="small text-muted p-2">
-                每晚约 22:00（及补跑）仅用真源日K对账；未收盘/无日K/模拟行情不对账。综合得分容差 5%（平均绝对偏差%）。交易日 15:00 前预测当日，否则下一交易日。盘中做 T 会用有效预测作软边界（须接近预测高/低区才触发）。
+                每晚约 22:00（及补跑）仅用真源日K对账；未收盘/无日K/模拟行情不对账。综合得分容差 5%。校准回看约 28 日并分「次日/当日」桶；ATR 可达包络压虚高上沿。交易日 15:00 前预测当日，否则下一交易日。盘中 softBand 会按近史准确率放宽/降权。
                 @if (Model.AvgCombinedAccuracyPct.HasValue)
                 {
                     <span>历史综合准确率：@Model.AvgCombinedAccuracyPct?.ToString("N1")。</span>
