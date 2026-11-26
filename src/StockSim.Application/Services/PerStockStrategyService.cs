@@ -78,7 +78,8 @@ public class PerStockStrategyService
     /// </summary>
     private static StockDetailBundle BuildMinimalRealBundleFromLightQuote(
         LightStockQuote light,
-        StockDetailBundle? maybeSimulated)
+        StockDetailBundle? maybeSimulated,
+        string? dataSourceNote = null)
     {
         var last = light.Last;
         var pre = light.PreClose is > 0 ? light.PreClose.Value : last;
@@ -116,7 +117,8 @@ public class PerStockStrategyService
             FundFlow = new FundFlowSnapshot { AsOf = light.AsOf },
             DailyBars = bars,
             MinuteBars = Array.Empty<MinuteBar>(),
-            DataSourceNote = "数据来源：东方财富轻量报价恢复（详情分时/日K不完整，已跳过模拟回退）。",
+            DataSourceNote = dataSourceNote
+                ?? "数据来源：轻量真价恢复（详情分时/日K不完整，已跳过模拟回退）。",
             IsSimulated = false
         };
     }
@@ -243,13 +245,40 @@ public class PerStockStrategyService
             detail = BuildMinimalRealBundleFromLightQuote(light, detail);
         }
 
+        // 行情源全挂：用库内最近真实价作锚点降级预测（仍拒绝纯模拟价）
+        var usedDbAnchor = false;
+        if (detail is null || detail.IsSimulated)
+        {
+            var refPx = await ResolveLastKnownRealPriceAsync(item.Symbol, ct);
+            if (refPx is > 0)
+            {
+                usedDbAnchor = true;
+                _logger.LogWarning(
+                    "AI refresh {Symbol}: market feeds empty; using DB last-known real price {Px} as degraded anchor",
+                    item.Symbol, refPx);
+                detail = BuildMinimalRealBundleFromLightQuote(
+                    new LightStockQuote
+                    {
+                        Symbol = item.Symbol,
+                        Name = item.Name,
+                        Last = refPx.Value,
+                        ChangePercent = 0,
+                        PreClose = refPx.Value,
+                        AsOf = DateTime.Now,
+                        IsSimulated = false
+                    },
+                    detail,
+                    "数据来源：库内最近真实价锚点（行情源暂不可用；降级预测且不计入准确率）。");
+            }
+        }
+
         // 先作废价位离谱的 Pending（假数据污染），无论本次是否继续
         await InvalidateImplausiblePendingForecastsAsync(item.Symbol, ct);
 
         if (detail is null || detail.IsSimulated)
         {
             var why = detail is null
-                ? "行情详情为空（轻量报价与详情均不可用）"
+                ? "行情详情为空（东财/公开备用/库内锚点均不可用）"
                 : $"行情为模拟/回退（{detail.DataSourceNote}）";
             _logger.LogWarning(
                 "Refuse AI strategy refresh for {Symbol}: {Why} — will not write fake-price forecasts",
@@ -259,8 +288,10 @@ public class PerStockStrategyService
                 $"已拒绝 AI 刷新 {item.Symbol}：{why}。请待真实行情恢复后再点「AI刷新预测」，以免写入假价格。");
         }
 
-        // 无日K：仍可预测，但不计入准确率（降级）
-        var degradedNoDaily = detail.DailyBars is null || detail.DailyBars.Count == 0;
+        // 无日K 或库内锚点：仍可预测，但不计入准确率（降级）
+        var degradedNoDaily = usedDbAnchor
+                              || detail.DailyBars is null
+                              || detail.DailyBars.Count == 0;
 
         var daily21 = (detail.DailyBars ?? Array.Empty<DailyBar>())
             .OrderByDescending(d => d.Date)
@@ -774,39 +805,45 @@ public class PerStockStrategyService
         return results.Count == 0 ? null : results;
     }
 
-    /// <summary>将近史真实价对比，作废价位离谱的 Pending，并清掉策略参数里的假 forecast。</summary>
+    /// <summary>
+    /// 删除价位离谱的预测（含已 Evaluated 的假价对账），并清掉策略参数里的假 forecast。
+    /// 参考价优先成交/持仓成本，避免被假 Actual 二次污染。
+    /// </summary>
     private async Task InvalidateImplausiblePendingForecastsAsync(string symbol, CancellationToken ct)
     {
         var refPx = await ResolveLastKnownRealPriceAsync(symbol, ct);
         if (refPx is null or <= 0) return;
 
-        var pending = await _db.PriceRangeForecasts
-            .Where(f => f.Symbol == symbol && f.Status == ForecastStatus.Pending)
+        var rows = await _db.PriceRangeForecasts
+            .Where(f => f.Symbol == symbol)
             .ToListAsync(ct);
 
-        var touched = 0;
-        foreach (var row in pending)
+        var removed = 0;
+        foreach (var row in rows)
         {
-            if (PriceForecastMetrics.IsForecastPriceLevelPlausible(
-                    row.PredictedHigh, row.PredictedLow, refPx.Value))
-                continue;
+            var predBad = !PriceForecastMetrics.IsForecastPriceLevelPlausible(
+                row.PredictedHigh, row.PredictedLow, refPx.Value);
+            var actBad = row.ActualHigh is > 0 && row.ActualLow is > 0
+                         && !PriceForecastMetrics.IsForecastPriceLevelPlausible(
+                             row.ActualHigh.Value, row.ActualLow.Value, refPx.Value);
+            var noteFake = !string.IsNullOrWhiteSpace(row.Notes)
+                           && (row.Notes.Contains("模拟", StringComparison.Ordinal)
+                               || row.Notes.Contains("假预测", StringComparison.Ordinal)
+                               || row.Notes.Contains("价位离谱", StringComparison.Ordinal));
+            if (!predBad && !actBad && !noteFake) continue;
 
-            row.Status = ForecastStatus.Skipped;
-            row.CountsTowardAccuracy = false;
-            row.EvaluatedAt = DateTime.Now;
-            row.Notes =
-                $"价位离谱已作废：预测中枢相对近史真实价 {refPx:F2} 偏离过大（疑似模拟行情污染）";
-            touched++;
+            _db.PriceRangeForecasts.Remove(row);
+            removed++;
         }
 
         var clearedStrategy = await ClearImplausibleStrategyForecastAsync(symbol, refPx.Value, ct);
 
-        if (touched > 0 || clearedStrategy)
+        if (removed > 0 || clearedStrategy)
         {
             await _db.SaveChangesAsync(ct);
             _logger.LogWarning(
-                "Invalidated implausible forecasts for {Symbol}: pending={Pending}, strategyCleared={Cleared}, ref={Ref:F2}",
-                symbol, touched, clearedStrategy, refPx);
+                "Purged implausible forecasts for {Symbol}: deleted={Deleted}, strategyCleared={Cleared}, ref={Ref:F2}",
+                symbol, removed, clearedStrategy, refPx);
         }
     }
 
@@ -860,19 +897,7 @@ public class PerStockStrategyService
 
     private async Task<decimal?> ResolveLastKnownRealPriceAsync(string symbol, CancellationToken ct)
     {
-        var evaluated = await _db.PriceRangeForecasts.AsNoTracking()
-            .Where(f => f.Symbol == symbol
-                        && f.Status == ForecastStatus.Evaluated
-                        && f.ActualHigh != null
-                        && f.ActualLow != null
-                        && f.ActualHigh > 0
-                        && f.ActualLow > 0)
-            .OrderByDescending(f => f.ForecastForDate)
-            .Select(f => new { f.ActualHigh, f.ActualLow })
-            .FirstOrDefaultAsync(ct);
-        if (evaluated is not null)
-            return (evaluated.ActualHigh!.Value + evaluated.ActualLow!.Value) / 2m;
-
+        // 成交/成本优先：Evaluated Actual 可能来自模拟日K，不能当真价锚
         var tradePx = await _db.Trades.AsNoTracking()
             .Where(t => t.Symbol == symbol && t.Price > 0)
             .OrderByDescending(t => t.CreationTime)
@@ -884,7 +909,27 @@ public class PerStockStrategyService
             .Where(p => p.Symbol == symbol && p.AvgCost > 0)
             .Select(p => (decimal?)p.AvgCost)
             .FirstOrDefaultAsync(ct);
-        return pos is > 0 ? pos : null;
+        if (pos is > 0) return pos;
+
+        var evaluated = await _db.PriceRangeForecasts.AsNoTracking()
+            .Where(f => f.Symbol == symbol
+                        && f.Status == ForecastStatus.Evaluated
+                        && f.ActualHigh != null
+                        && f.ActualLow != null
+                        && f.ActualHigh > 0
+                        && f.ActualLow > 0)
+            .OrderByDescending(f => f.ForecastForDate)
+            .Select(f => new { f.ActualHigh, f.ActualLow })
+            .Take(8)
+            .ToListAsync(ct);
+        if (evaluated.Count == 0) return null;
+
+        // 取 Actual 中枢的中位数，降低单条假对账污染
+        var mids = evaluated
+            .Select(e => (e.ActualHigh!.Value + e.ActualLow!.Value) / 2m)
+            .OrderBy(x => x)
+            .ToList();
+        return mids[mids.Count / 2];
     }
 
     private async Task UpsertPendingForecastAsync(

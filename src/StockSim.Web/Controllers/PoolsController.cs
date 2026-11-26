@@ -443,6 +443,193 @@ public class PoolsController : Controller
         return RedirectToAction(nameof(Index));
     }
 
+    /// <summary>批量移除池成分。</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BatchRemove(Guid poolId, List<Guid>? itemIds, CancellationToken ct)
+    {
+        var ids = await NormalizePoolItemIdsAsync(poolId, itemIds, ct);
+        if (ids.Count == 0)
+        {
+            TempData["Msg"] = "请先勾选要移除的股票";
+            TempData["MsgType"] = "warning";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var ok = 0;
+        foreach (var id in ids)
+        {
+            try
+            {
+                await _pools.RemoveItemAsync(id, ct);
+                ok++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "BatchRemove failed for {ItemId}", id);
+            }
+        }
+
+        TempData["Msg"] = $"批量移除完成：成功 {ok} / 选中 {ids.Count}";
+        TempData["MsgType"] = ok > 0 ? "success" : "danger";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>批量入队 AI 策略刷新。</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BatchRefreshStrategy(Guid poolId, List<Guid>? itemIds, CancellationToken ct)
+    {
+        var ids = await NormalizePoolItemIdsAsync(poolId, itemIds, ct);
+        if (ids.Count == 0)
+        {
+            TempData["Msg"] = "请先勾选要刷新策略的股票";
+            TempData["MsgType"] = "warning";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var items = await _db.StockPoolItems.AsNoTracking()
+            .Where(i => ids.Contains(i.Id))
+            .Select(i => new { i.Id, i.Symbol, i.Name, i.BoundStrategyId })
+            .ToListAsync(ct);
+
+        var ensured = 0;
+        foreach (var i in items.Where(x => !x.BoundStrategyId.HasValue))
+        {
+            var r = await _perStock.EnsureDefaultStrategyAsync(i.Id, ct);
+            if (r.Ok) ensured++;
+        }
+
+        var queued = 0;
+        Guid? firstQueueId = null;
+        foreach (var i in items)
+        {
+            var q = await _aiQueue.EnqueueStrategyRefreshAsync(i.Id, i.Symbol, i.Name, nightly: true, ct);
+            firstQueueId ??= q.Id;
+            queued++;
+        }
+
+        TempData["Msg"] =
+            $"批量 AI 刷策略：已入队 {queued} 只"
+            + (ensured > 0 ? $"（补建默认策略 {ensured}）" : "")
+            + "，请到 AI 队列查看进度。";
+        TempData["MsgType"] = queued > 0 ? "success" : "warning";
+        return firstQueueId.HasValue
+            ? RedirectToAction("Queue", "Ai", new { highlight = firstQueueId.Value })
+            : RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>批量入队做T每日复盘（非做T/无活动会跳过）。</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BatchEnqueueDailyTReview(
+        Guid poolId,
+        List<Guid>? itemIds,
+        string? tradeDate,
+        bool force = false,
+        CancellationToken ct = default)
+    {
+        var ids = await NormalizePoolItemIdsAsync(poolId, itemIds, ct);
+        if (ids.Count == 0)
+        {
+            TempData["Msg"] = "请先勾选要复盘的股票";
+            TempData["MsgType"] = "warning";
+            return RedirectToAction(nameof(Index));
+        }
+
+        DateTime? day = null;
+        if (!string.IsNullOrWhiteSpace(tradeDate) && DateTime.TryParse(tradeDate, out var parsed))
+            day = parsed.Date;
+
+        var queued = 0;
+        var skipped = 0;
+        Guid? firstQueueId = null;
+        foreach (var id in ids)
+        {
+            var result = await _dailyTReviews.EnqueueAsync(id, day, force, ct);
+            if (result.Ok && result.QueueId.HasValue)
+            {
+                queued++;
+                firstQueueId ??= result.QueueId;
+            }
+            else
+            {
+                skipped++;
+            }
+        }
+
+        TempData["Msg"] =
+            $"批量复盘：选中 {ids.Count}，新入队 {queued}，跳过/已有 {skipped}"
+            + (force ? "（强制）" : "")
+            + "。仅做T且有成交/决策会入队。";
+        TempData["MsgType"] = queued > 0 ? "success" : "warning";
+        return queued > 0 && firstQueueId.HasValue
+            ? RedirectToAction("Queue", "Ai", new { highlight = firstQueueId.Value })
+            : RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>批量入队次日下跌风险预测。</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> BatchPredictDownsideRisk(
+        Guid poolId,
+        List<Guid>? itemIds,
+        CancellationToken ct)
+    {
+        var ids = await NormalizePoolItemIdsAsync(poolId, itemIds, ct);
+        if (ids.Count == 0)
+        {
+            TempData["Msg"] = "请先勾选要预测风险的股票";
+            TempData["MsgType"] = "warning";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var queued = 0;
+        var skipped = 0;
+        Guid? firstQueueId = null;
+        foreach (var id in ids)
+        {
+            var result = await _downsideRisk.EnqueuePredictAsync(id, ct);
+            if (result.Ok && result.QueueId.HasValue)
+            {
+                queued++;
+                firstQueueId ??= result.QueueId;
+            }
+            else if (result.Ok)
+            {
+                skipped++; // 已有近期结果等
+            }
+            else
+            {
+                skipped++;
+            }
+        }
+
+        TempData["Msg"] =
+            $"批量预测风险：选中 {ids.Count}，新入队 {queued}，跳过/已有 {skipped}。请到 AI 队列查看进度。";
+        TempData["MsgType"] = queued > 0 ? "success" : "warning";
+        return queued > 0 && firstQueueId.HasValue
+            ? RedirectToAction("Queue", "Ai", new { highlight = firstQueueId.Value })
+            : RedirectToAction(nameof(Index));
+    }
+
+    private async Task<List<Guid>> NormalizePoolItemIdsAsync(
+        Guid poolId,
+        List<Guid>? itemIds,
+        CancellationToken ct)
+    {
+        if (itemIds is null || itemIds.Count == 0)
+            return [];
+
+        var wanted = itemIds.Where(x => x != Guid.Empty).Distinct().ToList();
+        if (wanted.Count == 0) return [];
+
+        return await _db.StockPoolItems.AsNoTracking()
+            .Where(i => i.StockPoolId == poolId && wanted.Contains(i.Id))
+            .Select(i => i.Id)
+            .ToListAsync(ct);
+    }
+
     [HttpPost]
     public async Task<IActionResult> DeleteForecast(Guid id, string symbol, Guid? poolId, CancellationToken ct)
     {

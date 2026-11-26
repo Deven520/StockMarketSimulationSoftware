@@ -40,12 +40,52 @@
     <div class="col-auto"><button class="btn btn-primary" type="submit">添加</button></div>
     <div class="col-12"><span class="text-muted small">代码、名称至少填一项；趋势股/次日预涨仅观察不挂做T；次日预涨会标记预涨日（下一交易日）。</span></div>
 </form>
-<div class="mb-2">
+<div class="mb-2 d-flex flex-wrap align-items-center gap-2">
     <div class="btn-group btn-group-sm" role="group" aria-label="类型筛选">
         <button type="button" class="btn btn-outline-secondary active" data-style-filter="all">全部</button>
         <button type="button" class="btn btn-outline-secondary" data-style-filter="t">做T股</button>
         <button type="button" class="btn btn-outline-secondary" data-style-filter="trend">趋势股</button>
         <button type="button" class="btn btn-outline-secondary" data-style-filter="nextday">次日预涨</button>
+    </div>
+    <div class="btn-group btn-group-sm" role="group" aria-label="批量选择">
+        <button type="button" class="btn btn-outline-secondary" id="btnSelectPage" title="勾选当前页可见行">全选本页</button>
+        <button type="button" class="btn btn-outline-secondary" id="btnSelectFiltered" title="勾选当前筛选下的全部股票（含其他页）">全选筛选</button>
+        <button type="button" class="btn btn-outline-secondary" id="btnClearSelect">取消勾选</button>
+    </div>
+</div>
+
+<div id="poolBatchBar" class="pool-batch-bar d-none mb-2">
+    <div class="pool-batch-bar-inner d-flex flex-wrap align-items-center gap-2">
+        <span class="fw-semibold" id="poolSelectedCount">已选 0</span>
+        <span class="text-muted small">批量操作：</span>
+        <form asp-action="BatchRefreshStrategy" method="post" class="d-inline pool-batch-form" data-confirm="确认对已选股票批量 AI 刷策略并入队？">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="poolId" value="@poolId" />
+            <div class="pool-batch-ids"></div>
+            <button type="submit" class="btn btn-sm btn-warning">批量AI刷策略</button>
+        </form>
+        <form asp-action="BatchEnqueueDailyTReview" method="post" class="d-inline pool-batch-form"
+              data-confirm="确认对已选做T股批量入队每日复盘？（非做T/无成交会跳过）">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="poolId" value="@poolId" />
+            <input type="hidden" name="tradeDate" value="@DateTime.Today.ToString("yyyy-MM-dd")" />
+            <div class="pool-batch-ids"></div>
+            <button type="submit" class="btn btn-sm btn-outline-warning">批量复盘</button>
+        </form>
+        <form asp-action="BatchPredictDownsideRisk" method="post" class="d-inline pool-batch-form"
+              data-confirm="确认对已选股票批量预测次日下跌风险？">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="poolId" value="@poolId" />
+            <div class="pool-batch-ids"></div>
+            <button type="submit" class="btn btn-sm btn-outline-danger">批量预测风险</button>
+        </form>
+        <form asp-action="BatchRemove" method="post" class="d-inline pool-batch-form"
+              data-confirm="确认从股票池批量移除已选股票？此操作不可撤销。">
+            @Html.AntiForgeryToken()
+            <input type="hidden" name="poolId" value="@poolId" />
+            <div class="pool-batch-ids"></div>
+            <button type="submit" class="btn btn-sm btn-outline-danger">批量移除</button>
+        </form>
     </div>
 </div>
 <div class="row g-2 mb-3 align-items-center">
@@ -101,6 +141,9 @@
 <table class="table table-sm table-hover align-middle stock-pool-table" id="poolTable" data-pool-id="@poolId">
     <thead class="table-dark">
         <tr>
+            <th class="pool-check-col text-center" title="多选">
+                <input type="checkbox" id="poolSelectAll" class="form-check-input m-0" aria-label="全选本页" />
+            </th>
             <th class="pool-sort" data-sort="symbol" title="点击排序"><span class="pool-th-label">代码</span></th>
             <th class="pool-sort" data-sort="name" title="点击排序"><span class="pool-th-label">名称</span></th>
             <th class="pool-sort" data-sort="style" title="点击排序"><span class="pool-th-label">类型</span></th>
@@ -140,7 +183,7 @@
         var provisionalEquityPct = initialCash > 0
             ? (provisionalEquity - initialCash) / initialCash * 100m
             : 0m;
-        <tr data-symbol="@i.Symbol" data-qty="@i.PositionQty" data-avg="@i.AvgCost"
+        <tr data-item-id="@i.Id" data-symbol="@i.Symbol" data-qty="@i.PositionQty" data-avg="@i.AvgCost"
             data-trade-style="@styleKey"
             data-name="@i.Name"
             data-rise-date="@(i.PredictedRiseDate?.ToString("yyyy-MM-dd") ?? "")"
@@ -151,6 +194,10 @@
             data-equity="@provisionalEquity.ToString(System.Globalization.CultureInfo.InvariantCulture)"
             data-equity-pct="@provisionalEquityPct.ToString(System.Globalization.CultureInfo.InvariantCulture)"
             data-last="" data-chg="" data-mv="" data-upnl="">
+            <td class="pool-check-col text-center">
+                <input type="checkbox" class="form-check-input pool-row-check m-0" value="@i.Id"
+                       aria-label="选择 @i.Symbol" />
+            </td>
             <td>
                 <a asp-action="Stock" asp-route-symbol="@i.Symbol" asp-route-poolId="@poolId" class="fw-semibold text-decoration-none">@i.Symbol</a>
             </td>
@@ -772,6 +819,7 @@
             addBtn(String(totalPages), totalPages, false, currentPage === totalPages);
         }
         addBtn('下一页', currentPage + 1, currentPage >= totalPages, false);
+        if (typeof window.poolSyncBatchUi === 'function') window.poolSyncBatchUi();
     }
 
     pageSizeSelect?.addEventListener('change', () => {
@@ -907,5 +955,96 @@
     });
     window.addEventListener('scroll', closeActionMenu, true);
     window.addEventListener('resize', closeActionMenu);
+
+    // —— 多选批量操作 ——
+    const batchBar = document.getElementById('poolBatchBar');
+    const selectedCountEl = document.getElementById('poolSelectedCount');
+    const selectAllCb = document.getElementById('poolSelectAll');
+
+    function rowChecks() {
+        return Array.from(table.querySelectorAll('tbody .pool-row-check'));
+    }
+
+    function selectedIds() {
+        return rowChecks().filter(c => c.checked).map(c => c.value);
+    }
+
+    function syncBatchUi() {
+        const ids = selectedIds();
+        const n = ids.length;
+        if (selectedCountEl) selectedCountEl.textContent = `已选 ${n}`;
+        if (batchBar) batchBar.classList.toggle('d-none', n === 0);
+
+        const visibleChecks = rowChecks().filter(c => {
+            const tr = c.closest('tr');
+            return tr && tr.style.display !== 'none';
+        });
+        if (selectAllCb) {
+            const checkedVisible = visibleChecks.filter(c => c.checked).length;
+            selectAllCb.checked = visibleChecks.length > 0 && checkedVisible === visibleChecks.length;
+            selectAllCb.indeterminate = checkedVisible > 0 && checkedVisible < visibleChecks.length;
+        }
+    }
+
+    function setChecks(list, on) {
+        list.forEach(c => { c.checked = !!on; });
+        syncBatchUi();
+    }
+
+    table.addEventListener('change', e => {
+        if (e.target.classList.contains('pool-row-check') || e.target === selectAllCb) {
+            if (e.target === selectAllCb) {
+                const visible = rowChecks().filter(c => {
+                    const tr = c.closest('tr');
+                    return tr && tr.style.display !== 'none';
+                });
+                setChecks(visible, selectAllCb.checked);
+                return;
+            }
+            syncBatchUi();
+        }
+    });
+
+    document.getElementById('btnSelectPage')?.addEventListener('click', () => {
+        const visible = rowChecks().filter(c => {
+            const tr = c.closest('tr');
+            return tr && tr.style.display !== 'none';
+        });
+        setChecks(visible, true);
+    });
+
+    document.getElementById('btnSelectFiltered')?.addEventListener('click', () => {
+        // visibleRows() = 当前筛选全部（含其他页）
+        const rows = typeof visibleRows === 'function' ? visibleRows() : [];
+        const checks = rows.map(tr => tr.querySelector('.pool-row-check')).filter(Boolean);
+        setChecks(checks, true);
+    });
+
+    document.getElementById('btnClearSelect')?.addEventListener('click', () => {
+        setChecks(rowChecks(), false);
+    });
+
+    document.querySelectorAll('.pool-batch-form').forEach(form => {
+        form.addEventListener('submit', e => {
+            const ids = selectedIds();
+            if (ids.length === 0) {
+                e.preventDefault();
+                alert('请先勾选股票');
+                return;
+            }
+            const msg = form.getAttribute('data-confirm');
+            if (msg && !confirm(msg + `\n共 ${ids.length} 只`)) {
+                e.preventDefault();
+                return;
+            }
+            const box = form.querySelector('.pool-batch-ids');
+            if (!box) return;
+            box.innerHTML = ids.map(id =>
+                `<input type="hidden" name="itemIds" value="${id}" />`).join('');
+        });
+    });
+
+    window.poolSyncBatchUi = syncBatchUi;
+    syncBatchUi();
 })();
 </script>

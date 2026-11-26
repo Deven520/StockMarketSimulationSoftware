@@ -66,35 +66,54 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
         try
         {
             var quote = await FetchQuoteAsync(ToSecId(symbol), ct);
-            // 轻量报价供 Worker 下单：失败时不要回退模拟价（假价会导致错误成交）
-            if (quote is null) return null;
-
-            // 未开市/停牌时东财最新价常为 "-"→0，列表应展示昨收，避免显示 0.00
-            var preClose = quote.PreClose;
-            var usedPreClose = quote.Last <= 0 && preClose > 0;
-            var last = EffectiveLast(quote.Last, preClose);
-            if (last <= 0) return null;
-            var changePct = usedPreClose || preClose <= 0
-                ? 0
-                : (last - preClose) / preClose * 100m;
-            return new LightStockQuote
+            if (quote is not null)
             {
-                Symbol = symbol,
-                Name = string.IsNullOrWhiteSpace(quote.Name) ? (name ?? symbol) : quote.Name,
-                Last = Round4(last),
-                ChangePercent = Round2(changePct),
-                PreClose = preClose > 0 ? Round4(preClose) : null,
-                PeTtm = quote.Fundamentals.PeTtm,
-                Pb = quote.Fundamentals.Pb,
-                Industry = quote.Fundamentals.Industry,
-                AsOf = DateTime.Now,
-                IsSimulated = false
-            };
+                // 未开市/停牌时东财最新价常为 "-"→0，列表应展示昨收，避免显示 0.00
+                var preClose = quote.PreClose;
+                var usedPreClose = quote.Last <= 0 && preClose > 0;
+                var last = EffectiveLast(quote.Last, preClose);
+                if (last > 0)
+                {
+                    var changePct = usedPreClose || preClose <= 0
+                        ? 0
+                        : (last - preClose) / preClose * 100m;
+                    return new LightStockQuote
+                    {
+                        Symbol = symbol,
+                        Name = string.IsNullOrWhiteSpace(quote.Name) ? (name ?? symbol) : quote.Name,
+                        Last = Round4(last),
+                        ChangePercent = Round2(changePct),
+                        PreClose = preClose > 0 ? Round4(preClose) : null,
+                        PeTtm = quote.Fundamentals.PeTtm,
+                        Pb = quote.Fundamentals.Pb,
+                        Industry = quote.Fundamentals.Industry,
+                        AsOf = DateTime.Now,
+                        IsSimulated = false
+                    };
+                }
+            }
+
+            // 东财 push2 在部分网络 TLS 被掐；腾讯/新浪作真价备用（不做模拟价）
+            var alt = await PublicQuoteFallback.TryGetLightQuoteAsync(_http, _logger, symbol, name, ct);
+            if (alt is not null)
+            {
+                _logger.LogWarning("EastMoney light quote empty for {Symbol}; using public fallback Last={Last}",
+                    symbol, alt.Last);
+            }
+
+            return alt;
         }
         catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
         {
             _logger.LogWarning(ex, "Light quote failed for {Symbol}", symbol);
-            return null;
+            try
+            {
+                return await PublicQuoteFallback.TryGetLightQuoteAsync(_http, _logger, symbol, name, ct);
+            }
+            catch (Exception ex2) when (!ShouldRethrowCancel(ex2, ct))
+            {
+                return null;
+            }
         }
     }
 
@@ -243,16 +262,52 @@ public sealed class EastMoneyStockDetailProvider : IStockDetailProvider
         catch (Exception ex) when (!ShouldRethrowCancel(ex, ct))
         { _logger.LogDebug(ex, "EastMoney fundFlow skipped for {Symbol}", symbol); }
 
-        // 仅当报价与日K都拿不到时才回退模拟（健康检查只测报价，故可能「检查正常、旧 GetDetail 却模拟」）
+        // 东财空包：先腾讯/新浪真价备用，最后才模拟占位（AI 会拒绝模拟）
         if (quote is null && daily.Count == 0)
         {
+            var alt = await PublicQuoteFallback.TryGetDetailPartsAsync(_http, _logger, symbol, name, ct);
+            if (alt is not null)
+            {
+                _logger.LogWarning(
+                    "EastMoney empty for {Symbol}; using public quote/daily fallback (bars={Bars})",
+                    symbol, alt.Value.Daily.Count);
+                var ab = alt.Value.Board;
+                var bundleAlt = new StockDetailBundle
+                {
+                    Board = new StockQuoteBoard
+                    {
+                        Symbol = ab.Symbol,
+                        Name = ab.Name,
+                        Last = ab.Last,
+                        Open = ab.Open,
+                        High = ab.High,
+                        Low = ab.Low,
+                        PreClose = ab.PreClose,
+                        Change = ab.Change,
+                        ChangePercent = ab.ChangePercent,
+                        Volume = ab.Volume,
+                        Amount = ab.Amount,
+                        TurnoverRate = ab.TurnoverRate,
+                        AsOf = ab.AsOf
+                    },
+                    Fundamentals = new StockFundamentals(),
+                    FundFlow = new FundFlowSnapshot { AsOf = DateTime.Now },
+                    DailyBars = alt.Value.Daily,
+                    MinuteBars = Array.Empty<MinuteBar>(),
+                    DataSourceNote = alt.Value.Note,
+                    IsSimulated = false
+                };
+                _cache.Set(cacheKey, bundleAlt, DetailCacheTtl);
+                return bundleAlt;
+            }
+
             _logger.LogWarning(
-                "EastMoney empty quote+daily for {Symbol}, fallback simulated (AI refresh must reject IsSimulated)",
+                "EastMoney+public fallback empty for {Symbol}, simulated placeholder (AI must reject IsSimulated)",
                 symbol);
             var fb = await _fallback.GetDetailAsync(symbol, name, ct);
             return fb is null
                 ? null
-                : CloneWithNote(fb, "东方财富报价/日K均无数据，已回退模拟行情（仅供页面占位；AI预测/对账不得使用）。");
+                : CloneWithNote(fb, "东方财富与公开备用行情均无数据，已回退模拟行情（仅供页面占位；AI预测/对账不得使用）。");
         }
 
         var lastDaily = daily.Count > 0 ? daily[^1] : null;
