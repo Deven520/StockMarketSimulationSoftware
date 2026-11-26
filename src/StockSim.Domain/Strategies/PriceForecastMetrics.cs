@@ -265,6 +265,104 @@ public static class PriceForecastMetrics
                || rationale.Contains("placeholder", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>提示词用：预计算高低价数字硬顶（元）。</summary>
+    public sealed record ForecastConstraints(
+        [property: System.Text.Json.Serialization.JsonPropertyName("refClose")] decimal RefClose,
+        [property: System.Text.Json.Serialization.JsonPropertyName("atr")] decimal? Atr14,
+        [property: System.Text.Json.Serialization.JsonPropertyName("capHigh")] decimal CapHigh,
+        [property: System.Text.Json.Serialization.JsonPropertyName("floorLow")] decimal FloorLow,
+        [property: System.Text.Json.Serialization.JsonPropertyName("minWidth")] decimal MinWidth,
+        [property: System.Text.Json.Serialization.JsonPropertyName("maxWidth")] decimal MaxWidth,
+        [property: System.Text.Json.Serialization.JsonPropertyName("limitCapPct")] decimal LimitCapPct,
+        [property: System.Text.Json.Serialization.JsonPropertyName("degraded")] bool Degraded,
+        [property: System.Text.Json.Serialization.JsonPropertyName("note")] string? Note);
+
+    /// <summary>
+    /// 由日K/报价预计算 AI 必须遵守的高低价硬顶。
+    /// capHigh = min(涨停近似, ref+ATR×1.2)；floorLow = max(跌停近似, ref−ATR×1.25)。
+    /// </summary>
+    public static ForecastConstraints? BuildForecastConstraints(
+        IEnumerable<DailyBar>? dailyBars,
+        DateTime forecastTargetDate,
+        decimal limitCapPct,
+        decimal? boardPreClose = null,
+        decimal? boardLast = null,
+        int atrPeriod = DefaultAtrPeriod)
+    {
+        var capPct = limitCapPct > 0 ? limitCapPct : DefaultLimitCapPct;
+        var bars = dailyBars?
+            .Where(b => b.Close > 0)
+            .OrderBy(b => b.Date)
+            .ToList() ?? [];
+        var hist = bars.Where(b => b.Date.Date < forecastTargetDate.Date).ToList();
+        if (hist.Count < 2) hist = bars;
+
+        decimal refClose = 0;
+        decimal? atr = null;
+        var degraded = false;
+        string? note = null;
+
+        if (hist.Count >= 2)
+        {
+            refClose = hist[^1].Close;
+            atr = ComputeAverageTrueRange(hist, atrPeriod);
+        }
+
+        if (refClose <= 0)
+        {
+            degraded = true;
+            refClose = boardPreClose is > 0
+                ? boardPreClose.Value
+                : boardLast is > 0 ? boardLast.Value : 0;
+            note = "无足够日K，弱约束（仅昨收/现价）";
+        }
+
+        if (refClose <= 0) return null;
+
+        var limitHigh = Math.Round(refClose * (1m + capPct / 100m), 2);
+        var limitLow = Math.Round(Math.Max(0.01m, refClose * (1m - capPct / 100m)), 2);
+
+        decimal capHigh;
+        decimal floorLow;
+        decimal minWidth;
+        decimal maxWidth;
+
+        if (atr is > 0)
+        {
+            // 提示词默认上沿用 1.2×ATR（略严于运营可达 1.35），压虚高
+            capHigh = Math.Round(Math.Min(limitHigh, refClose + atr.Value * 1.2m), 2);
+            floorLow = Math.Round(Math.Max(limitLow, refClose - atr.Value * ReachableLowAtrMultiple), 2);
+            minWidth = Math.Round(atr.Value * MinAtrBandMultiple, 2);
+            maxWidth = Math.Round(atr.Value * MaxAtrBandMultiple, 2);
+        }
+        else
+        {
+            degraded = true;
+            note ??= "无 ATR，仅用涨跌停近似带";
+            // 弱约束：带宽约 limitCap 的一半
+            var half = Math.Round(refClose * (capPct / 100m) * 0.5m, 2);
+            capHigh = Math.Round(Math.Min(limitHigh, refClose + half), 2);
+            floorLow = Math.Round(Math.Max(limitLow, refClose - half), 2);
+            minWidth = Math.Round(Math.Max(0.01m, refClose * 0.008m), 2);
+            maxWidth = Math.Round(Math.Max(minWidth, refClose * (capPct / 100m)), 2);
+        }
+
+        if (capHigh < refClose) capHigh = refClose;
+        if (floorLow > refClose) floorLow = refClose;
+        if (capHigh < floorLow) (capHigh, floorLow) = (floorLow, capHigh);
+
+        return new ForecastConstraints(
+            Math.Round(refClose, 4),
+            atr is > 0 ? Math.Round(atr.Value, 4) : null,
+            capHigh,
+            floorLow,
+            minWidth,
+            maxWidth,
+            capPct,
+            degraded,
+            note);
+    }
+
     /// <summary>
     /// 近 N 日 ATR 高低带：参考价 ± ATR×倍数。
     /// 参考价优先昨收/最近收盘。
@@ -408,7 +506,8 @@ public static class PriceForecastMetrics
             CountsTowardAccuracy = true,
             SoftBandMode = string.IsNullOrWhiteSpace(ai.SoftBandMode) ? "softPrefer" : ai.SoftBandMode,
             CapHighByLimitPct = ai.CapHighByLimitPct > 0 ? ai.CapHighByLimitPct : DefaultLimitCapPct,
-            RecentCombinedAccuracyPct = ai.RecentCombinedAccuracyPct
+            RecentCombinedAccuracyPct = ai.RecentCombinedAccuracyPct,
+            Work = ai.Work
         };
     }
 
@@ -487,7 +586,8 @@ public static class PriceForecastMetrics
             CountsTowardAccuracy = true,
             SoftBandMode = string.IsNullOrWhiteSpace(forecast.SoftBandMode) ? "softPrefer" : forecast.SoftBandMode,
             CapHighByLimitPct = forecast.CapHighByLimitPct > 0 ? forecast.CapHighByLimitPct : DefaultLimitCapPct,
-            RecentCombinedAccuracyPct = forecast.RecentCombinedAccuracyPct
+            RecentCombinedAccuracyPct = forecast.RecentCombinedAccuracyPct,
+            Work = forecast.Work
         };
     }
 

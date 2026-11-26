@@ -345,30 +345,32 @@ public class PerStockStrategyService
             .ToListAsync(ct);
 
         var userGoal = await ResolveUserGoalAsync(item, ct);
-        var goalClause = userGoal is null
+        var goalClauseStrategy = userGoal is null
             ? "用户未绑定有效投资目标时，按稳健做T边界输出。"
             : $"用户预期目标：预期收益 {userGoal.ExpectedReturnPct}% 、预期周期 {userGoal.HorizonDays} 天"
               + (string.IsNullOrWhiteSpace(userGoal.ThemePreference) ? "" : $"、题材偏好「{userGoal.ThemePreference.Trim()}」")
-              + "。请在策略边界（aggression/triggers/sizing/risk）与高低价预测中体现该目标节奏，勿承诺收益。";
+              + "。请在策略边界（aggression/triggers/sizing/risk）中体现该目标节奏，勿承诺收益；禁止为凑预期收益改写已锁定的高低价。";
 
         var asOfLocal = DateTime.Now;
         var forecastTargetDate = PriceForecastMetrics.ResolveForecastTargetDate(asOfLocal);
         var forecastIsSameDay = PriceForecastMetrics.IsSameDayForecastWindow(asOfLocal);
         var forecastDayLabel = forecastIsSameDay ? "当日（收盘前）" : "下一交易日";
+        var forecastScopeKey = forecastIsSameDay ? "sameTradingDay" : "nextTradingDay";
         var bias = await LoadAiBiasStatsAsync(item.Symbol, ct);
         var meanHighDev = bias.MeanHighDev;
         var meanLowDev = bias.MeanLowDev;
         var avgAiAcc = bias.AvgCombined;
         var biasSamples = bias.SampleCount;
         var limitCapHint = ResolveLimitCapPct(item.Symbol);
-        var calibrationHint = biasSamples < PriceForecastMetrics.SoftHighTightenMinSamples || avgAiAcc is null
-            ? $"尚无足够 AI 对账样本（需≥{PriceForecastMetrics.SoftHighTightenMinSamples}）；请独立给出高低价，区间宽度贴近近史 ATR，上沿优先 ≤ 昨收+ATR×1.2（且勿超昨收约+{limitCapHint:0.#}%），勿用参考价±固定百分比占位。"
-            : $"近史AI校准池({bias.HorizonNote}) n={biasSamples} 中位偏差 高={meanHighDev:F2}% 低={meanLowDev:F2}%，综合准确率={avgAiAcc:F1}，上沿高估日占比={bias.HighOverPct:F0}%；" +
-              $"请纠偏：predictedHigh 易虚高则下调，predictedLow 勿过度低于昨收−ATR；区间贴近 ATR，上沿≤昨收+min({limitCapHint:0.#}%, ATR可达)，禁止占位区间。";
-        const string pathForecastExtra =
-            "另须输出 path（enable=true、confirmUntil=10:15、breakAvoidSigma、pullbackSellPct，可选 pathPriors 四类先验概率之和为1：" +
-            "HighOpenHighGo/HighOpenLowGo/LowOpenHighGo/LowOpenLowGo，仅作开盘假设加权不替代盘中确认）；" +
-            "forecast 增加 softBandMode=softPrefer、capHighByLimitPct，predictedHigh 须考虑涨停/ATR 上沿，勿给出日内不可达的过高上沿。";
+        var atrBaseline = PriceForecastMetrics.TryBuildAtrBaseline(detail?.DailyBars, forecastTargetDate);
+        var constraints = PriceForecastMetrics.BuildForecastConstraints(
+            detail?.DailyBars,
+            forecastTargetDate,
+            limitCapHint,
+            detail?.Board?.PreClose,
+            detail?.Board?.Last);
+        var errorCard = await BuildForecastErrorCardAsync(item.Symbol, ct);
+        var newsCatalyst = SuspectNewsCatalyst(hotNews, stockNews);
         var recentTReviews = await _dailyTReviews.LoadRecentReviewsForPromptAsync(item.Symbol, 5, ct);
         var reviewHint = recentTReviews is null
             ? "尚无每日复盘结论；按行情与对账独立迭代。"
@@ -376,77 +378,85 @@ public class PerStockStrategyService
               "forceFlatExcessShouldNotOpenT=true、preferCloseOpenTBeforeNewSell=true、" +
               "minRoundTripRequiresTwoXFees=true；若 tightenMinRoundTripEdge 则抬高 risk.minRoundTripEdgeBps；" +
               "若 penalizeZeroCycleWithFees 则收紧新开腿与 ForceFlat 买回；" +
-              "再调整 triggers/path/session/forecast，勿无视复盘结论。KPI 看费后净 Cycle（cycle−fees）。";
+              "只调整 triggers/path/session/sizing/risk，禁止改写 lockedForecast。KPI 看费后净 Cycle（cycle−fees）。";
 
         var countTowardAcc = !degradedNoDaily;
-        var degradeHint = degradedNoDaily
-            ? "注意：近史日K缺失，属降级预测：须仍给出 predictedHigh/predictedLow，但 countsTowardAccuracy=false；区间以现价/昨收与涨跌停常识约束，勿编造虚假ATR。"
-            : "";
-        var prompt = isNightlyUpdate
-            ? $"请为 {item.Symbol} {item.Name} 输出 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)。{goalClause}结合近21日行情、今日成交、决策日志、热点新闻、「高低价预测对账结果」与「每日做T复盘」迭代；只定边界与偏好（triggers/sizing/risk/session/style/path），不要输出盘中下单指令。必须在 parameters.forecast（或根级 forecast）给出对{forecastDayLabel} {forecastTargetDate:yyyy-MM-dd} 的 predictedHigh / predictedLow（元），并设 source=ai、countsTowardAccuracy={countTowardAcc.ToString().ToLowerInvariant()}、softBandMode=softPrefer、capHighByLimitPct={limitCapHint:0.#}。{pathForecastExtra}{calibrationHint}{reviewHint}{degradeHint}规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。"
-            : $"请为 {item.Symbol} {item.Name} 生成 AdaptiveIntradayT 策略画像 StrategyPolicy(version=2)：style/aggression/session/triggers(含 anchor=vwap 与 buy/sellDeviationPct 的 base/min/max)/sizing/risk/factors/path/aiNotes/forecast。{goalClause}forecast 须含 forDate={forecastTargetDate:yyyy-MM-dd}、predictedHigh、predictedLow、source=ai、countsTowardAccuracy={countTowardAcc.ToString().ToLowerInvariant()}、softBandMode=softPrefer、capHighByLimitPct={limitCapHint:0.#}（预测{forecastDayLabel}最高/最低价）。{pathForecastExtra}{calibrationHint}{reviewHint}{degradeHint}规则：交易日 15:00 前预测当日高低，收盘后/非交易日预测下一交易日高低。用于状态机「路径分型+先高抛后低吸」做T，参数是边界不是死脚本。";
+        var calibrationHint = biasSamples < PriceForecastMetrics.SoftHighTightenMinSamples || avgAiAcc is null
+            ? $"尚无足够 AI 对账样本（需≥{PriceForecastMetrics.SoftHighTightenMinSamples}）；按 forecastConstraints 数字硬顶独立给高低价，禁止 ref±固定% 占位。"
+            : $"近史AI校准池({bias.HorizonNote}) n={biasSamples} 中位偏差 高={meanHighDev:F2}% 低={meanLowDev:F2}%，综合准确率={avgAiAcc:F1}，上沿高估日占比={bias.HighOverPct:F0}%；请按主错误纠偏，禁止占位区间。";
 
-        var payload = JsonSerializer.Serialize(new
+        var horizonHint = forecastIsSameDay
+            ? BuildSameDayForecastHint(detail?.Board)
+            : "【NextDay】隔夜跳空不确定；上沿优先靠近 ref+ATR×1.0（勿轻易顶满 capHigh）；predictedLow 勿过度低于 floorLow 内侧。";
+
+        var degradeHint = degradedNoDaily || constraints is { Degraded: true }
+            ? "降级/弱约束：须仍给出 predictedHigh/predictedLow；countsTowardAccuracy=false；勿编造虚假 ATR。"
+            : "";
+
+        var forecastPrompt =
+            $"【ForecastOnly】为 {item.Symbol} {item.Name} 预测{forecastDayLabel} {forecastTargetDate:yyyy-MM-dd} 最高/最低价（元）。" +
+            $"本次视野={forecastScopeKey}。{horizonHint}" +
+            $"必须严格遵守 payload.forecastConstraints：predictedHigh∈[refClose,capHigh]，predictedLow∈[floorLow,refClose]，width∈[minWidth,maxWidth]（degraded 时可略放宽但仍须有理）。" +
+            $"输出 JSON：{{analysis, forecast:{{forDate,predictedHigh,predictedLow,source:ai,countsTowardAccuracy:{(countTowardAcc ? "true" : "false")},softBandMode:softPrefer,capHighByLimitPct:{limitCapHint:0.#},work:{{ref,atr,capHigh,floorLow,chosenHigh,chosenLow}},rationale}}}}。" +
+            $"rationale 必须引用 constraints 中的数字；禁止「震荡上沿/下沿」空话。" +
+            (newsCatalyst
+                ? "新闻疑似硬催化：上沿可相对 ATR 略放宽，但仍 ≤ capHigh。"
+                : "无明显硬催化：禁止把上沿拉近涨停，必须落在 constraints 带宽内。") +
+            "目标收益仅供风险偏好参考，禁止为凑收益拉宽区间。" +
+            calibrationHint +
+            (errorCard is null ? "" : "请消化 forecastErrorCard.primaryError 与近史对拍表。") +
+            degradeHint;
+
+        var quotePayload = detail.Board is null ? null : new
         {
-            mode,
-            schema = "StrategyPolicy/v2",
+            detail.Board.Last,
+            detail.Board.Open,
+            detail.Board.High,
+            detail.Board.Low,
+            detail.Board.ChangePercent,
+            detail.Board.PreClose,
+            detail.Board.TurnoverRate
+        };
+
+        var forecastCalibrationPayload = new
+        {
+            meanHighDeviationPct = meanHighDev,
+            meanLowDeviationPct = meanLowDev,
+            avgAiCombinedAccuracyPct = avgAiAcc,
+            sampleCount = biasSamples,
+            calibrationStrength = bias.CalibrationStrength,
+            highOverestimatePct = bias.HighOverPct,
+            horizonNote = bias.HorizonNote,
+            atrAvgCombinedAccuracyPct = bias.AtrAvgCombined,
+            lookbackDays = PriceForecastMetrics.EvaluationLookbackDays
+        };
+
+        var forecastPayload = JsonSerializer.Serialize(new
+        {
+            mode = "ForecastOnly",
+            schema = "PriceForecast/v1",
             symbol = item.Symbol,
             name = item.Name,
-            poolId = item.StockPoolId,
-            userGoal = userGoal is null ? null : new
-            {
-                goalId = userGoal.Id,
-                expectedReturnPct = userGoal.ExpectedReturnPct,
-                horizonDays = userGoal.HorizonDays,
-                themePreference = userGoal.ThemePreference,
-                status = userGoal.Status.ToString(),
-                startDate = userGoal.StartDate?.ToString("yyyy-MM-dd"),
-                targetEndDate = userGoal.TargetEndDate?.ToString("yyyy-MM-dd")
-            },
             lookbackDays = 21,
             marketDataSimulated = detail.IsSimulated,
             marketDataDegradedNoDaily = degradedNoDaily,
             marketDataNote = detail.DataSourceNote,
             dailyBars = daily21,
-            quote = detail.Board is null ? null : new
-            {
-                detail.Board.Last,
-                detail.Board.Open,
-                detail.Board.High,
-                detail.Board.Low,
-                detail.Board.ChangePercent,
-                detail.Board.PreClose,
-                detail.Board.TurnoverRate
-            },
-            fundamentals = detail?.Fundamentals,
+            quote = quotePayload,
             hotNews = hotNews.Select(n => new { n.Title, n.Summary, n.Source, n.PublishedAt }),
             stockNews = stockNews.Select(n => new { n.Title, n.Summary, n.Source }),
-            currentParameters = currentParams,
-            todayTrades,
-            recentDecisions,
-            recentDailyTReviews = recentTReviews,
+            newsCatalystSuspected = newsCatalyst,
             forecastEvaluation,
-            forecastCalibration = new
-            {
-                meanHighDeviationPct = meanHighDev,
-                meanLowDeviationPct = meanLowDev,
-                avgAiCombinedAccuracyPct = avgAiAcc,
-                sampleCount = biasSamples,
-                calibrationStrength = bias.CalibrationStrength,
-                highOverestimatePct = bias.HighOverPct,
-                horizonNote = bias.HorizonNote,
-                atrAvgCombinedAccuracyPct = bias.AtrAvgCombined,
-                lookbackDays = PriceForecastMetrics.EvaluationLookbackDays
-            },
-            atrBaselineHint = PriceForecastMetrics.TryBuildAtrBaseline(detail?.DailyBars, forecastTargetDate),
+            forecastCalibration = forecastCalibrationPayload,
+            forecastConstraints = constraints,
+            forecastErrorCard = errorCard,
+            atrBaselineHint = atrBaseline,
             forecastTargetDate = forecastTargetDate.ToString("yyyy-MM-dd"),
-            forecastScope = forecastIsSameDay ? "sameTradingDay" : "nextTradingDay",
-            forecastRule = "交易日且本地时间<15:00预测当日高低；否则预测下一交易日高低；占位预测不得计入准确率",
+            forecastScope = forecastScopeKey,
+            forecastRule = "交易日且本地时间<15:00预测当日高低；否则预测下一交易日高低；占位不得计入准确率",
             expectedOutput = new
             {
                 analysis = "string",
-                steps = new[] { "string" },
-                parameters = StrategyParameters.Default(),
                 forecast = new
                 {
                     forDate = forecastTargetDate.ToString("yyyy-MM-dd"),
@@ -454,14 +464,17 @@ public class PerStockStrategyService
                     predictedLow = 0,
                     rationale = "string",
                     source = "ai",
-                    countsTowardAccuracy = countTowardAcc
-                },
-                changeNote = "string",
-                risk = "string"
+                    countsTowardAccuracy = countTowardAcc,
+                    softBandMode = "softPrefer",
+                    capHighByLimitPct = limitCapHint,
+                    work = new { @ref = 0, atr = 0, capHigh = 0, floorLow = 0, chosenHigh = 0, chosenLow = 0 }
+                }
             },
             asOf = asOfLocal
         });
 
+        var prompt = $"[Round1 ForecastOnly]\n{forecastPrompt}";
+        var payload = forecastPayload;
         var job = new AiJob
         {
             JobType = AiJobType.StrategyUpdate,
@@ -474,32 +487,138 @@ public class PerStockStrategyService
 
         try
         {
-            var output = await _ai.RunStrategyUpdateAsync(prompt, payload, ct);
-            job.OutputPayload = output;
+            // —— Round1：专轮高低价 ——
+            string? forecastOutput = null;
+            ForecastPolicy? rawForecast = null;
+            try
+            {
+                forecastOutput = await _ai.RunForecastAsync(forecastPrompt, forecastPayload, ct);
+                rawForecast = ParseStrategyOutput(forecastOutput).Forecast;
+            }
+            catch (Exception ex1)
+            {
+                _logger.LogWarning(ex1, "ForecastOnly round failed for {Symbol}", item.Symbol);
+            }
+
+            var policy = StrategyParameters.Default();
+            ApplyOperationalForecast(
+                policy,
+                rawForecast,
+                atrBaseline,
+                bias,
+                forecastTargetDate,
+                item.Symbol);
+            if ((degradedNoDaily || constraints is { Degraded: true }) && policy.Forecast is not null)
+            {
+                policy.Forecast.CountsTowardAccuracy = false;
+                var tag = "降级预测(弱约束/无日K，不计入准确率)";
+                policy.Forecast.Rationale = string.IsNullOrWhiteSpace(policy.Forecast.Rationale)
+                    ? tag
+                    : $"{policy.Forecast.Rationale} | {tag}";
+            }
+
+            if (policy.Forecast is null || policy.Forecast.PredictedHigh <= 0 || policy.Forecast.PredictedLow <= 0)
+            {
+                if (atrBaseline is not null)
+                    policy.Forecast = atrBaseline;
+            }
+
+            var lockedForecast = policy.Forecast;
+
+            // —— Round2：策略画像（禁止改写 lockedForecast）——
+            var strategyPrompt = isNightlyUpdate
+                ? $"【StrategyPolicy】为 {item.Symbol} {item.Name} 输出 AdaptiveIntradayT StrategyPolicy(version=2)。{goalClauseStrategy}" +
+                  "结合近21日行情、今日成交、决策日志、热点新闻与每日复盘迭代；只定边界与偏好（triggers/sizing/risk/session/style/path），不要输出盘中下单指令。" +
+                  "payload.lockedForecast 已定稿：必须原样写入 parameters.forecast（或根级 forecast），禁止改写 predictedHigh/predictedLow。" +
+                  "另须输出 path（enable=true、confirmUntil=10:15、breakAvoidSigma、pullbackSellPct，可选 pathPriors）。" +
+                  reviewHint
+                : $"【StrategyPolicy】为 {item.Symbol} {item.Name} 生成 AdaptiveIntradayT StrategyPolicy(version=2)：style/aggression/session/triggers/sizing/risk/factors/path/aiNotes。" +
+                  $"{goalClauseStrategy}payload.lockedForecast 已定稿，必须原样放入 forecast，禁止改写高低价。用于状态机做T，参数是边界不是死脚本。" +
+                  reviewHint;
+
+            var strategyPayload = JsonSerializer.Serialize(new
+            {
+                mode,
+                schema = "StrategyPolicy/v2",
+                round = 2,
+                symbol = item.Symbol,
+                name = item.Name,
+                poolId = item.StockPoolId,
+                userGoal = userGoal is null ? null : new
+                {
+                    goalId = userGoal.Id,
+                    expectedReturnPct = userGoal.ExpectedReturnPct,
+                    horizonDays = userGoal.HorizonDays,
+                    themePreference = userGoal.ThemePreference,
+                    status = userGoal.Status.ToString(),
+                    startDate = userGoal.StartDate?.ToString("yyyy-MM-dd"),
+                    targetEndDate = userGoal.TargetEndDate?.ToString("yyyy-MM-dd")
+                },
+                lookbackDays = 21,
+                marketDataNote = detail.DataSourceNote,
+                dailyBars = daily21,
+                quote = quotePayload,
+                fundamentals = detail?.Fundamentals,
+                hotNews = hotNews.Select(n => new { n.Title, n.Summary, n.Source, n.PublishedAt }),
+                stockNews = stockNews.Select(n => new { n.Title, n.Summary, n.Source }),
+                currentParameters = currentParams,
+                todayTrades,
+                recentDecisions,
+                recentDailyTReviews = recentTReviews,
+                forecastEvaluation,
+                lockedForecast,
+                forecastTargetDate = forecastTargetDate.ToString("yyyy-MM-dd"),
+                forecastScope = forecastScopeKey,
+                expectedOutput = new
+                {
+                    analysis = "string",
+                    steps = new[] { "string" },
+                    parameters = StrategyParameters.Default(),
+                    forecast = lockedForecast,
+                    changeNote = "string",
+                    risk = "string"
+                },
+                asOf = asOfLocal
+            });
+
+            job.Prompt = $"[Round1 ForecastOnly]\n{forecastPrompt}\n\n[Round2 StrategyPolicy]\n{strategyPrompt}";
+            job.InputPayload = JsonSerializer.Serialize(new
+            {
+                round1 = new { prompt = forecastPrompt, payload = JsonSerializer.Deserialize<JsonElement>(forecastPayload) },
+                round2 = new { prompt = strategyPrompt, payload = JsonSerializer.Deserialize<JsonElement>(strategyPayload) }
+            }, new JsonSerializerOptions { WriteIndented = true });
+            await _db.SaveChangesAsync(ct);
+
+            var output = await _ai.RunStrategyUpdateAsync(strategyPrompt, strategyPayload, ct);
+            job.OutputPayload = JsonSerializer.Serialize(new
+            {
+                round1 = forecastOutput,
+                round2 = output
+            }, new JsonSerializerOptions { WriteIndented = true });
             var parsed = ParseStrategyOutput(output);
             job.AnalysisSummary = parsed.Analysis;
             job.AnalysisStepsJson = parsed.StepsJson;
 
             var parametersJson = parsed.ParametersJson ?? StrategyParameters.Default().ToJson();
-            var policy = StrategyParameters.FromJson(parametersJson);
-            var atrBaseline = PriceForecastMetrics.TryBuildAtrBaseline(detail?.DailyBars, forecastTargetDate);
-            ApplyOperationalForecast(
-                policy,
-                parsed.Forecast,
-                atrBaseline,
-                bias,
-                forecastTargetDate,
-                item.Symbol);
-            if (degradedNoDaily && policy.Forecast is not null)
+            policy = StrategyParameters.FromJson(parametersJson);
+            // 强制锁定 Round1 运营后的高低价，防止第二轮覆盖
+            if (lockedForecast is not null)
+                policy.Forecast = lockedForecast;
+            else
             {
-                policy.Forecast.CountsTowardAccuracy = false;
-                var tag = "降级预测(无日K，不计入准确率)";
-                policy.Forecast.Rationale = string.IsNullOrWhiteSpace(policy.Forecast.Rationale)
-                    ? tag
-                    : $"{policy.Forecast.Rationale} | {tag}";
+                ApplyOperationalForecast(
+                    policy,
+                    parsed.Forecast,
+                    atrBaseline,
+                    bias,
+                    forecastTargetDate,
+                    item.Symbol);
             }
+
             await AbsorbExecutableReviewHintsAsync(policy, item.Symbol, ct);
             parametersJson = policy.ToJson();
+            prompt = job.Prompt ?? prompt;
+            payload = job.InputPayload ?? strategyPayload;
 
             Guid strategyId;
             Guid? versionId = null;
@@ -1335,7 +1454,129 @@ public class PerStockStrategyService
             AsOf = GetString(fcEl, "asOf"),
             Rationale = GetString(fcEl, "rationale"),
             Source = GetString(fcEl, "source"),
-            CountsTowardAccuracy = GetBool(fcEl, "countsTowardAccuracy")
+            CountsTowardAccuracy = GetBool(fcEl, "countsTowardAccuracy"),
+            SoftBandMode = GetString(fcEl, "softBandMode") ?? "softPrefer",
+            CapHighByLimitPct = GetDecimal(fcEl, "capHighByLimitPct") ?? 12m,
+            Work = TryParseForecastWork(fcEl)
+        };
+    }
+
+    private static ForecastWorkNotes? TryParseForecastWork(JsonElement fcEl)
+    {
+        if (!fcEl.TryGetProperty("work", out var w) || w.ValueKind != JsonValueKind.Object)
+            return null;
+        return new ForecastWorkNotes
+        {
+            Ref = GetDecimal(w, "ref") ?? GetDecimal(w, "Ref"),
+            Atr = GetDecimal(w, "atr"),
+            CapHigh = GetDecimal(w, "capHigh"),
+            FloorLow = GetDecimal(w, "floorLow"),
+            ChosenHigh = GetDecimal(w, "chosenHigh"),
+            ChosenLow = GetDecimal(w, "chosenLow")
+        };
+    }
+
+    private static string BuildSameDayForecastHint(StockQuoteBoard? board)
+    {
+        if (board is null || board.Last <= 0)
+            return "【SameDay】预测当日全日高低；须说明剩余波幅判断。";
+        var parts = new List<string>
+        {
+            "【SameDay】预测当日全日高低，须兼容已实现盘面："
+        };
+        if (board.Open > 0) parts.Add($"今开{board.Open:F2}");
+        if (board.High > 0) parts.Add($"今高{board.High:F2}（predictedHigh≥今高）");
+        if (board.Low > 0) parts.Add($"今低{board.Low:F2}（predictedLow≤今低）");
+        parts.Add($"现价{board.Last:F2}");
+        return string.Join("；", parts) + "。并说明剩余波幅。";
+    }
+
+    private static bool SuspectNewsCatalyst(
+        IReadOnlyList<MarketNewsItem> hotNews,
+        IReadOnlyList<MarketNewsItem> stockNews)
+    {
+        static bool Hit(string? t)
+        {
+            if (string.IsNullOrWhiteSpace(t)) return false;
+            string[] keys =
+            [
+                "业绩", "预增", "预亏", "重组", "并购", "中标", "政策", "增持", "减持",
+                "回购", "立案", "问询", "涨停", "跌停", "财报", "订单", "合同"
+            ];
+            foreach (var k in keys)
+            {
+                if (t.Contains(k, StringComparison.Ordinal)) return true;
+            }
+
+            return false;
+        }
+
+        foreach (var n in stockNews)
+        {
+            if (Hit(n.Title) || Hit(n.Summary)) return true;
+        }
+
+        foreach (var n in hotNews.Take(6))
+        {
+            if (Hit(n.Title) || Hit(n.Summary)) return true;
+        }
+
+        return false;
+    }
+
+    private async Task<object?> BuildForecastErrorCardAsync(string symbol, CancellationToken ct)
+    {
+        var from = DateTime.Today.AddDays(-PriceForecastMetrics.EvaluationLookbackDays);
+        var rows = await _db.PriceRangeForecasts.AsNoTracking()
+            .Where(f => f.Symbol == symbol
+                        && f.Status == ForecastStatus.Evaluated
+                        && f.CountsTowardAccuracy
+                        && f.Source == ForecastSource.Ai
+                        && f.ForecastForDate >= from
+                        && f.ActualHigh != null
+                        && f.ActualLow != null
+                        && f.HighDeviationPct != null
+                        && f.LowDeviationPct != null)
+            .OrderByDescending(f => f.ForecastForDate)
+            .Take(12)
+            .ToListAsync(ct);
+
+        rows = rows
+            .Where(r => !PriceForecastMetrics.IsOutlierEvaluation(r.HighDeviationPct!.Value, r.LowDeviationPct!.Value))
+            .Take(5)
+            .ToList();
+        if (rows.Count == 0)
+            return new { primaryError = "Insufficient", samples = Array.Empty<object>() };
+
+        var overHigh = rows.Count(r => r.HighDeviationPct!.Value > 1m);
+        var underLow = rows.Count(r => r.LowDeviationPct!.Value < -1m);
+        var tooWide = rows.Count(r =>
+        {
+            var w = Math.Abs(r.PredictedHigh - r.PredictedLow);
+            var aw = Math.Abs(r.ActualHigh!.Value - r.ActualLow!.Value);
+            return aw > 0 && w > aw * 1.8m;
+        });
+
+        var primary = "Balanced";
+        if (overHigh >= underLow && overHigh >= tooWide && overHigh > 0) primary = "OverHigh";
+        else if (underLow > overHigh && underLow >= tooWide) primary = "UnderLow";
+        else if (tooWide > overHigh && tooWide > underLow) primary = "TooWide";
+
+        return new
+        {
+            primaryError = primary,
+            samples = rows.Select(r => new
+            {
+                forDate = r.ForecastForDate.ToString("yyyy-MM-dd"),
+                predictedHigh = r.PredictedHigh,
+                predictedLow = r.PredictedLow,
+                actualHigh = r.ActualHigh,
+                actualLow = r.ActualLow,
+                highDeviationPct = r.HighDeviationPct,
+                lowDeviationPct = r.LowDeviationPct,
+                rangeHit = r.RangeHit,
+                combinedAccuracyPct = r.CombinedAccuracyPct
+            }).ToList()
         };
     }
 

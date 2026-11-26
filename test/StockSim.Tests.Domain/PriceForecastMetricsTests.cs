@@ -130,6 +130,51 @@ public class PriceForecastMetricsTests
     }
 
     [Fact]
+    public void BuildForecastConstraints_Caps_High_By_Atr_And_Limit()
+    {
+        var bars = new List<DailyBar>();
+        var d = new DateTime(2026, 10, 1);
+        var close = 100m;
+        for (var i = 0; i < 20; i++)
+        {
+            bars.Add(new DailyBar
+            {
+                Date = d.AddDays(i),
+                Open = close,
+                High = close + 2m,
+                Low = close - 2m,
+                Close = close + 0.5m,
+                Volume = 1000,
+                Amount = 100000
+            });
+            close += 0.5m;
+        }
+
+        var target = new DateTime(2026, 10, 25);
+        var c = PriceForecastMetrics.BuildForecastConstraints(bars, target, 12m);
+        Assert.NotNull(c);
+        Assert.False(c!.Degraded);
+        Assert.True(c.Atr14 is > 0);
+        Assert.True(c.CapHigh <= c.RefClose * 1.12m + 0.01m);
+        Assert.True(c.CapHigh <= c.RefClose + c.Atr14!.Value * 1.2m + 0.01m);
+        Assert.True(c.FloorLow >= c.RefClose * 0.88m - 0.01m);
+        Assert.True(c.MinWidth > 0 && c.MaxWidth >= c.MinWidth);
+        Assert.True(c.CapHigh >= c.FloorLow);
+    }
+
+    [Fact]
+    public void BuildForecastConstraints_Degrades_Without_Bars_Using_Board()
+    {
+        var c = PriceForecastMetrics.BuildForecastConstraints(
+            null, new DateTime(2026, 11, 10), 12m, boardPreClose: 50m, boardLast: 51m);
+        Assert.NotNull(c);
+        Assert.True(c!.Degraded);
+        Assert.Equal(50m, c.RefClose);
+        Assert.True(c.CapHigh > c.FloorLow);
+        Assert.Null(c.Atr14);
+    }
+
+    [Fact]
     public void TryBuildAtrBaseline_Uses_Recent_Bars()
     {
         var bars = new List<DailyBar>();

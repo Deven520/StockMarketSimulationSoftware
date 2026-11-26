@@ -37,6 +37,9 @@ public sealed class CursorSdkAiClient : ICursorAiClient
     public Task<string> RunStrategyUpdateAsync(string prompt, string payloadJson, CancellationToken ct = default)
         => RunAsync("StrategyUpdate", prompt, payloadJson, ct);
 
+    public Task<string> RunForecastAsync(string prompt, string payloadJson, CancellationToken ct = default)
+        => RunAsync("ForecastOnly", prompt, payloadJson, ct);
+
     public Task<string> RunGoalToPromptAsync(string goalPayloadJson, CancellationToken ct = default)
     {
         var goalSummary = SummarizeGoalPayload(goalPayloadJson);
@@ -180,6 +183,7 @@ public sealed class CursorSdkAiClient : ICursorAiClient
         => type switch
         {
             "StrategyUpdate" => _placeholder.RunStrategyUpdateAsync(prompt, payloadJson ?? "{}", ct),
+            "ForecastOnly" => _placeholder.RunForecastAsync(prompt, payloadJson ?? "{}", ct),
             "GoalToPrompt" => _placeholder.RunGoalToPromptAsync(payloadJson ?? "{}", ct),
             _ => _placeholder.RunStockPickAsync(prompt, payloadJson, ct)
         };

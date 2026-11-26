@@ -13,6 +13,8 @@ public interface ICursorAiClient
 {
     Task<string> RunStockPickAsync(string prompt, string? contextJson, CancellationToken ct = default);
     Task<string> RunStrategyUpdateAsync(string prompt, string payloadJson, CancellationToken ct = default);
+    /// <summary>专轮高低价预测（与策略画像拆分，避免字段抢注意力）。</summary>
+    Task<string> RunForecastAsync(string prompt, string payloadJson, CancellationToken ct = default);
     /// <summary>投资目标 JSON → 选股提示词 JSON（prompt/rationale）。</summary>
     Task<string> RunGoalToPromptAsync(string goalPayloadJson, CancellationToken ct = default);
     Task<CursorAiConnectionStatus> GetConnectionStatusAsync(CancellationToken ct = default);

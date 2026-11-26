@@ -154,6 +154,9 @@ public sealed class FileCursorAiClient : ICursorAiClient
         return json;
     }
 
+    public Task<string> RunForecastAsync(string prompt, string payloadJson, CancellationToken ct = default)
+        => BuildForecastOnlyPlaceholderAsync(prompt, payloadJson, ct);
+
     public async Task<string> RunStrategyUpdateAsync(string prompt, string payloadJson, CancellationToken ct = default)
     {
         var id = Guid.NewGuid().ToString("N")[..8];
@@ -168,54 +171,37 @@ public sealed class FileCursorAiClient : ICursorAiClient
             return await File.ReadAllTextAsync(responsePath, ct);
         }
 
-        var asOf = DateTime.Now;
-        DateTime forecastTargetDate;
-        if (asOf.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday)
-            && asOf.TimeOfDay < new TimeSpan(9, 30, 0))
-        {
-            forecastTargetDate = asOf.Date;
-        }
-        else
-        {
-            forecastTargetDate = asOf.Date.AddDays(1);
-            while (forecastTargetDate.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
-                forecastTargetDate = forecastTargetDate.AddDays(1);
-        }
-
-        // 若请求载荷已带目标日，优先采用
-        try
-        {
-            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(payloadJson) ? "{}" : payloadJson);
-            if (doc.RootElement.TryGetProperty("forecastTargetDate", out var fd)
-                && fd.ValueKind == JsonValueKind.String
-                && DateTime.TryParse(fd.GetString(), out var parsed))
+        var (forecastTargetDate, last, predictedHigh, predictedLow) = ResolvePlaceholderForecast(payloadJson);
+        var locked = TryReadLockedForecast(payloadJson);
+        object forecastObj = locked is not null
+            ? locked
+            : new
             {
-                forecastTargetDate = parsed.Date;
-            }
-        }
-        catch
-        {
-            // ignore
-        }
-
-        var last = TryReadLastPrice(payloadJson) ?? 10m;
-        var predictedHigh = Math.Round(last * 1.015m, 2);
-        var predictedLow = Math.Round(last * 0.985m, 2);
+                forDate = forecastTargetDate.ToString("yyyy-MM-dd"),
+                predictedHigh,
+                predictedLow,
+                asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
+                rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）",
+                source = "placeholder",
+                countsTowardAccuracy = false
+            };
 
         var placeholder = new
         {
             analysis =
                 $"【策略更新分析说明】\n" +
-                $"1. 理解优化目标：「{prompt}」。\n" +
+                $"1. 理解优化目标：「{TruncateForLogic(prompt)}」。\n" +
                 "2. 结合近期盈亏与成交次数，建议略收紧单笔仓位、放宽日内次数上限。\n" +
                 "3. 参数调整不得绕过涨跌停/资金等硬风控。\n" +
-                $"4. 占位预测目标日 {forecastTargetDate:yyyy-MM-dd} 高低：高 {predictedHigh} / 低 {predictedLow}（相对参考价 {last} ±1.5%；交易日15:00前=当日，否则=下一交易日）。",
+                (locked is not null
+                    ? "4. 使用 payload.lockedForecast 原样写入 forecast，禁止改写高低价。"
+                    : $"4. 占位预测目标日 {forecastTargetDate:yyyy-MM-dd} 高低：高 {predictedHigh} / 低 {predictedLow}（相对参考价 {last}）。"),
             steps = new[]
             {
                 "读取当前策略参数与近期盈亏",
                 "识别过高触发次数或过大回撤",
                 "给出可审阅的参数建议",
-                "按开市前/后规则输出目标日最高/最低价预测"
+                locked is not null ? "原样回传 lockedForecast" : "按规则输出目标日高低价预测"
             },
             parameters = new
             {
@@ -256,35 +242,127 @@ public sealed class FileCursorAiClient : ICursorAiClient
                     trendFilter = "none"
                 },
                 aiNotes = "占位：偏震荡高抛低吸，避开早盘噪声",
-                forecast = new
-                {
-                    forDate = forecastTargetDate.ToString("yyyy-MM-dd"),
-                    predictedHigh,
-                    predictedLow,
-                    asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-                    rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）",
-                    source = "placeholder",
-                    countsTowardAccuracy = false
-                },
+                forecast = forecastObj,
                 feeModel = "AShareDefault"
             },
-            forecast = new
-            {
-                forDate = forecastTargetDate.ToString("yyyy-MM-dd"),
-                predictedHigh,
-                predictedLow,
-                asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
-                rationale = "占位：按参考价±1.5%给出目标日高低区间（交易日15:00前=当日，否则=下一交易日）",
-                source = "placeholder",
-                countsTowardAccuracy = false
-            },
-            changeNote = $"AI占位建议：{prompt}",
+            forecast = forecastObj,
+            changeNote = $"AI占位建议：{TruncateForLogic(prompt)}",
             risk = "须人工确认后方可生效，不得绕过风控硬约束"
         };
 
         var json = JsonSerializer.Serialize(placeholder, new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(responsePath, json, ct);
         return json;
+    }
+
+    private async Task<string> BuildForecastOnlyPlaceholderAsync(
+        string prompt, string payloadJson, CancellationToken ct)
+    {
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var requestPath = Path.Combine(_workDir, $"forecast_request_{id}.json");
+        var responsePath = Path.Combine(_workDir, $"forecast_response_{id}.json");
+        var request = new { type = "ForecastOnly", prompt, payloadJson, createdAt = DateTime.UtcNow };
+        await File.WriteAllTextAsync(
+            requestPath,
+            JsonSerializer.Serialize(request, new JsonSerializerOptions { WriteIndented = true }),
+            ct);
+        if (File.Exists(responsePath))
+            return await File.ReadAllTextAsync(responsePath, ct);
+
+        var (forecastTargetDate, last, predictedHigh, predictedLow) = ResolvePlaceholderForecast(payloadJson);
+        var placeholder = new
+        {
+            analysis = $"【ForecastOnly 占位】{TruncateForLogic(prompt)}",
+            forecast = new
+            {
+                forDate = forecastTargetDate.ToString("yyyy-MM-dd"),
+                predictedHigh,
+                predictedLow,
+                asOf = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss"),
+                rationale = $"占位：相对参考价 {last} 给出区间（须人工/真模型替换）",
+                source = "placeholder",
+                countsTowardAccuracy = false,
+                softBandMode = "softPrefer",
+                work = new
+                {
+                    @ref = last,
+                    atr = (decimal?)null,
+                    capHigh = predictedHigh,
+                    floorLow = predictedLow,
+                    chosenHigh = predictedHigh,
+                    chosenLow = predictedLow
+                }
+            }
+        };
+        var json = JsonSerializer.Serialize(placeholder, new JsonSerializerOptions { WriteIndented = true });
+        await File.WriteAllTextAsync(responsePath, json, ct);
+        return json;
+    }
+
+    private static (DateTime Target, decimal Last, decimal High, decimal Low) ResolvePlaceholderForecast(
+        string? payloadJson)
+    {
+        var asOf = DateTime.Now;
+        DateTime forecastTargetDate;
+        if (asOf.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday)
+            && asOf.TimeOfDay < new TimeSpan(15, 0, 0))
+            forecastTargetDate = asOf.Date;
+        else
+        {
+            forecastTargetDate = asOf.Date.AddDays(1);
+            while (forecastTargetDate.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                forecastTargetDate = forecastTargetDate.AddDays(1);
+        }
+
+        decimal? capHigh = null, floorLow = null, refClose = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(payloadJson) ? "{}" : payloadJson);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("forecastTargetDate", out var fd)
+                && fd.ValueKind == JsonValueKind.String
+                && DateTime.TryParse(fd.GetString(), out var parsed))
+                forecastTargetDate = parsed.Date;
+            if (root.TryGetProperty("forecastConstraints", out var fc) && fc.ValueKind == JsonValueKind.Object)
+            {
+                if (fc.TryGetProperty("refClose", out var r) && r.TryGetDecimal(out var rv) && rv > 0)
+                    refClose = rv;
+                if (fc.TryGetProperty("capHigh", out var ch) && ch.TryGetDecimal(out var chv) && chv > 0)
+                    capHigh = chv;
+                if (fc.TryGetProperty("floorLow", out var fl) && fl.TryGetDecimal(out var flv) && flv > 0)
+                    floorLow = flv;
+            }
+        }
+        catch { /* ignore */ }
+
+        var last = refClose ?? TryReadLastPrice(payloadJson) ?? 10m;
+        var predictedHigh = capHigh ?? Math.Round(last * 1.015m, 2);
+        var predictedLow = floorLow ?? Math.Round(last * 0.985m, 2);
+        // 占位取硬顶中点带，略收窄
+        if (capHigh is > 0 && floorLow is > 0)
+        {
+            predictedHigh = Math.Round((last + capHigh.Value) / 2m, 2);
+            predictedLow = Math.Round((last + floorLow.Value) / 2m, 2);
+        }
+
+        return (forecastTargetDate, last, predictedHigh, predictedLow);
+    }
+
+    private static JsonElement? TryReadLockedForecast(string? payloadJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(payloadJson) ? "{}" : payloadJson);
+            if (doc.RootElement.TryGetProperty("lockedForecast", out var lf)
+                && lf.ValueKind is JsonValueKind.Object)
+                return lf.Clone();
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return null;
     }
 
     private static string TruncateForLogic(string? prompt, int max = 80)

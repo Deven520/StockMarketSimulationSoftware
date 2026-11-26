@@ -335,6 +335,32 @@ public sealed class ForecastPolicy
     /// <summary>近史 AI 综合准确率（夜更写入，供盘中 softBand 降权）。</summary>
     [JsonPropertyName("recentCombinedAccuracyPct")]
     public decimal? RecentCombinedAccuracyPct { get; set; }
+
+    /// <summary>AI 演算过程（引用 forecastConstraints 数字）；缺失不挡主流程。</summary>
+    [JsonPropertyName("work")]
+    public ForecastWorkNotes? Work { get; set; }
+}
+
+/// <summary>高低价预测演算底稿（提示词契约）。</summary>
+public sealed class ForecastWorkNotes
+{
+    [JsonPropertyName("ref")]
+    public decimal? Ref { get; set; }
+
+    [JsonPropertyName("atr")]
+    public decimal? Atr { get; set; }
+
+    [JsonPropertyName("capHigh")]
+    public decimal? CapHigh { get; set; }
+
+    [JsonPropertyName("floorLow")]
+    public decimal? FloorLow { get; set; }
+
+    [JsonPropertyName("chosenHigh")]
+    public decimal? ChosenHigh { get; set; }
+
+    [JsonPropertyName("chosenLow")]
+    public decimal? ChosenLow { get; set; }
 }
 
 /// <summary>盘中路径分型策略边界。</summary>
